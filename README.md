@@ -104,6 +104,8 @@ ui/macos            SwiftUI app
 ```sh
 go test ./... -race -count=1     # Go unit and integration tests (offline: mock API and mock edge)
 go vet ./... && gofmt -l .       # must be clean
+scripts/test-app.sh              # SwiftUI unit, contract and snapshot tests (needs Xcode and XcodeGen)
+scripts/test-app.sh ui           # plus the XCUITest UI tests
 ./build.sh                       # full build
 ```
 

@@ -1,0 +1,5 @@
+# actionlint does not know GitHub's preview runner images yet. xcode-27 is the hosted macOS 27 + Xcode 27 image
+# (https://github.com/actions/runner-images/issues/14404); remove this once actionlint lists it.
+self-hosted-runner:
+  labels:
+    - xcode-27

@@ -16,3 +16,5 @@ First public version, not yet released.
 - Registration as a macOS device (`type` macOS, `model` from `hw.model`).
 - LaunchDaemon installer (`openwarp service install|uninstall`) that also removes the pre-rename `cwarp` service.
 - Open-source publication: MIT license, contributing guide, security policy, issue and PR templates.
+- Automated tests and CI: Go unit, integration and CLI tests; a JSON contract shared by the CLI and the app;
+  SwiftUI unit, snapshot and XCUITest UI tests; govulncheck, gitleaks and CodeQL.
