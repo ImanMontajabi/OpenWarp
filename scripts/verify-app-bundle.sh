@@ -23,6 +23,7 @@ for want in 16x1 32x2 32x1 64x2 128x1 256x2 256x1 512x2 512x1 1024x2; do
 done
 cli=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' "$(dirname "$0")/../internal/buildinfo/buildinfo.go")
 [ "$(key CFBundleShortVersionString)" = "$cli" ] || err "app version $(key CFBundleShortVersionString) != CLI version $cli"
+for f in LICENSE THIRD_PARTY_NOTICES.md; do [ -s "$APP/Contents/Resources/$f" ] || err "$f missing from the bundle"; done
 exe="$APP/Contents/MacOS/$(key CFBundleExecutable)"
 for arch in "$@"; do
   lipo -archs "$exe" | tr ' ' '\n' | grep -qx "$arch" || err "executable lacks $arch"

@@ -22,6 +22,11 @@ Public repo: <https://github.com/ImanMontajabi/OpenWarp> (MIT). `main` is protec
 pushes, force pushes or deletion, and every required CI check must pass. The maintainer is the only reviewer, so
 no approval is required, but every change still goes through a PR.
 
+Branch model: `main` = development (squash merges, merged branches auto-deleted); `release` = shippable, changed
+only by a PR from `main` (merge commit) that passes `release-candidate.yml`; `v*` tags on `release` run
+`release.yml`, which creates a **draft** release after approval in the `release` environment. Never merge
+`main` into `release`, tag, or publish a release without the maintainer's explicit go-ahead.
+
 1. Branch from `main`: `feat/…`, `fix/…`, `refactor/…`, `test/…`, `docs/…` or `ci/…`.
 2. Write tests first where practical: a new feature gets behaviour tests, a bug fix gets a regression test that
    fails without the fix. Never skip, disable or weaken a test to get a green build.

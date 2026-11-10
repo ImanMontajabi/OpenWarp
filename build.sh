@@ -23,6 +23,8 @@ swiftc -O -parse-as-library -target x86_64-apple-macos14.0 ui/macos/*.swift -o b
 lipo -create -output "$APP/Contents/MacOS/OpenWarp" build/OpenWarp-arm64 build/OpenWarp-x86_64
 rm build/OpenWarp-arm64 build/OpenWarp-x86_64
 cp build/openwarp "$APP/Contents/Resources/openwarp"
+# Licenses of the third-party code in the embedded CLI (scripts/third-party-notices.sh).
+cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 # App icon: compile the asset catalog (Assets.car + AppIcon.icns) from ui/macos/Assets.xcassets.
 xcrun actool ui/macos/Assets.xcassets --compile "$APP/Contents/Resources" --platform macosx \
   --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist build/assets-info.plist >/dev/null
