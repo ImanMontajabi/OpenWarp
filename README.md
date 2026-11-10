@@ -1,110 +1,134 @@
 # OpenWarp
 
-An independent client for the Cloudflare WARP consumer network, built from a
-reverse-engineering pass over the official macOS client (Cloudflare WARP
-2026.8.2115.0). It has a privileged daemon, a `warp-cli`-style CLI and a
-SwiftUI app with the same pages as the official UI.
+OpenWarp is an independent, open-source macOS client for the Cloudflare WARP consumer network. It has three
+parts: a background daemon written in Go, a `warp-cli`-style command-line tool (`openwarp`), and a native
+SwiftUI app.
 
-Not affiliated with Cloudflare. Using it means accepting the
-[WARP Terms of Service](https://www.cloudflare.com/application/terms/).
+> **OpenWarp is not affiliated with, endorsed by or supported by Cloudflare, Inc.** "Cloudflare" and "WARP" are
+> trademarks of Cloudflare, Inc. and are used here only to describe compatibility. OpenWarp talks to Cloudflare's
+> public WARP service, so using it means accepting the
+> [Cloudflare WARP Terms of Service](https://www.cloudflare.com/application/terms/).
 
-## How the official app works (findings)
+**Status:** early MVP (`0.1.0`, unreleased). Expect rough edges; see [Known limitations](#known-limitations).
 
-| Component | What it is |
+## Why
+
+The official WARP client is closed source. OpenWarp is a small, readable implementation of the same client
+protocols that anyone can audit, build and change. Its behaviour was worked out by studying how the official
+macOS client (version 2026.8.2115.0) talks to the network; no Cloudflare code is included.
+
+## Features
+
+| Area | What OpenWarp does |
 |---|---|
-| `Contents/MacOS/Cloudflare WARP` | Flutter UI (`App.framework`, `FlutterMacOS`, `rust_bridge.framework`, `tray_manager`, Sparkle updates) |
-| `Contents/Resources/CloudflareWARP` | Rust daemon (tokio actors: `actor-configuration`, `actor-ipc`, `warp-api-client`, `warp-edge`, `warp-storage`) |
-| `com.cloudflare.warp.PacketTunnel.systemextension` | NetworkExtension packet tunnel (utun) |
-| `warp-cli`, `warp-diag`, `warp-dex`, `warp-updater` | CLI, diagnostics, DEX tests, updater |
+| Connection modes | All seven modes of the official client: `warp` (traffic and DNS over UDP), `warp+doh`, `warp+dot`, `doh`, `dot`, `proxy` (local SOCKS5/HTTP proxy, no root) and `tunnel_only` |
+| Tunnel protocols | MASQUE (HTTP/3 CONNECT-IP over QUIC, with optional post-quantum key exchange) and WireGuard |
+| Registration | Register this Mac, show or delete the registration, attach a WARP+ license key, list the account's devices |
+| Settings | Split tunnel (exclude or include list), local domain fallback, 1.1.1.1 for Families, trusted Wi-Fi/Ethernet, MTU, proxy port, endpoint override, key rotation |
+| Reliability | Reconnect with backoff, endpoint and port fallback, restart on network change |
+| App | Compact window with Home, Connectivity, Settings, Profile and About pages, a cloud-shaped connect button and a menu-bar item |
 
-**Registration API.** The daemon calls `api.cloudflareclient.com`, sending a
-`cf-client-version` header. If DNS fails it falls back to the anycast API IPs
-`162.159.192.1` and `2606:4700:d0::a29f:c001`; both are in its logs as
-`ConsumerEndpointConfig`. A device registers once, then a single tunnel key
-is enrolled (`TunnelKeyType`): `curve25519` for WireGuard or `secp256r1` for
-MASQUE (`RegistrationTunnelKeys{key_type, tunnel_type}`). The response's
-`config` holds `peers[].public_key`, `peers[].endpoint.{v4,v6}`,
-`interface.addresses` and `client_id`.
+Not implemented: Zero Trust / Teams, MDM, DEX, device posture, the HTTP/2 fallback for MASQUE and
+hostname-based split tunnelling.
 
-**Tunnel protocols** (`warp_edge::{wireguard_tun, h3_tun}`):
-* **MASQUE** (the default): QUIC to `162.159.198.x`. Ports seen in the logs
-  are 443, 500, 1701, 4500, 4443, 8443 and 8095, with an HTTP/2 fallback.
-  * SNI is `consumer-masque.cloudflareclient.com`.
-  * TLS client auth uses a self-signed certificate made from the registered
-    P-256 key (`rcgen`; "Failed to create a self-signed client certificate").
-  * An extended CONNECT is sent to `cloudflareaccess.com` with
-    `:protocol = cf-connect-ip`.
-  * IP packets travel in HTTP datagrams: `quarter_stream_id` plus
-    "context id should be 0".
-  * Post-quantum is supported ("downgrades allowed").
-* **WireGuard**: a Cloudflare fork of `boringtun`. The endpoint is
-  `162.159.192.x:2408`, and the 3-byte `client_id` goes in the reserved
-  header bytes.
+## Requirements
 
-**Features / options** (from `warp-cli --help`, `settings list` and the UI):
-* modes `warp`, `doh`, `warp+doh`, `dot`, `warp+dot`, `proxy` (127.0.0.1:40000), `tunnel_only`
-* tunnel protocol, endpoint override, rotate-keys, MASQUE options
-* split tunnel (default exclude list), Local Domain Fallback
-* 1.1.1.1 for Families (off/malware/full)
-* trusted SSIDs, disable on Wi-Fi/ethernet
-* license key and device list
-* stats, Zero Trust / MDM / DEX / posture (enterprise only)
+- macOS 14 (Sonoma) or later. The build targets both Apple silicon (arm64) and Intel (x86_64); only Apple
+  silicon has been tested so far.
+- Administrator rights for the full-device VPN modes (`warp`, `warp+doh`, `warp+dot`, `doh`, `dot`,
+  `tunnel_only`). `proxy` mode runs without root.
+- To build from source: Go 1.27 and Xcode 27 (or its command-line tools).
 
-## What openwarp implements
+## Install and use
 
-| | |
-|---|---|
-| Registration | new / show / delete / license / devices / account, ToS prompt, DNS-failure API fallback |
-| Protocols | MASQUE (HTTP/3 CONNECT-IP, client cert, key pinning, PQ) and WireGuard (with reserved bytes) |
-| Endpoint selection | registration IP across known ports, then IPv6, or a manual override |
-| Modes | all seven of the official client's modes |
-| System | utun + routes + DNS on macOS (root), local DoH/DoT stub resolver |
-| Settings | split tunnel (exclude/include), Local Domain Fallback, Families, trusted networks, MTU, proxy port, always-on |
-| Reliability | reconnect with backoff, restart on network change, auto-connect at daemon start |
-| UI | "OpenWarp" SwiftUI window: compact portrait panel, bottom navigation (Home / Connectivity / Settings / Profile / About), interactive cloud, all seven modes as tiles, menu-bar item |
-
-Not implemented: Zero Trust/Teams, MDM, DEX, posture, the HTTP/2 MASQUE
-fallback, and hostname-based split tunnel.
-
-## Build & use
+There is no signed or notarized download yet, so OpenWarp is built from source:
 
 ```sh
-./build.sh                      # tests, then build/openwarp and build/OpenWarp.app
+git clone https://github.com/ImanMontajabi/OpenWarp.git
+cd OpenWarp
+./build.sh                                  # runs the Go tests, then builds build/openwarp and build/OpenWarp.app
 ```
 
-Full-device VPN (modes `warp*`, `doh`, `dot`, `tunnel_only` need root):
+Install the daemon as a LaunchDaemon (runs as root), register, and connect:
 
 ```sh
-sudo ./build/openwarp service install      # LaunchDaemon com.local.openwarp, logs in /var/log/openwarp.log
+sudo ./build/openwarp service install      # installs /usr/local/bin/openwarp, logs to /var/log/openwarp.log
 openwarp registration new --accept-tos
 openwarp connect
 openwarp status
-open build/OpenWarp.app
+open build/OpenWarp.app                     # the app drives the same daemon through the CLI
 ```
 
-No root (SOCKS5/HTTP proxy on 127.0.0.1:40000):
+Without root, `proxy` mode exposes a local SOCKS5/HTTP proxy on `127.0.0.1:40000`:
 
 ```sh
-./build/openwarp daemon &          # user daemon, state in ~/Library/Application Support/openwarp
-openwarp mode proxy && openwarp connect
-curl -x socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace   # warp=on
+./build/openwarp daemon &                  # user daemon; state in ~/Library/Application Support/openwarp
+./build/openwarp registration new --accept-tos
+./build/openwarp mode proxy && ./build/openwarp connect
+curl -x socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace   # look for warp=on
 ```
 
-Other commands: `openwarp tunnel protocol set wireguard|masque`, `openwarp dns families malware`,
-`openwarp tunnel ip add 203.0.113.0/24`, `openwarp trusted ssid add MyWiFi`, `openwarp registration license KEY`,
-`openwarp stats`, `openwarp settings`.
+More commands: `openwarp help`. Remove the service with `sudo openwarp service uninstall`.
 
-## Layout
+The registration (including its private keys and token) is stored in `state.json` with `0600` permissions in
+`/Library/Application Support/openwarp` (root daemon) or `~/Library/Application Support/openwarp` (user daemon).
+Never share that file.
+
+## How it works
 
 ```
-cmd/openwarp/          CLI + daemon entry, LaunchDaemon installer
+OpenWarp.app (SwiftUI) ──runs──> openwarp -j <command> ──HTTP over a unix socket──> openwarp daemon
+                                                                                      ├─ WARP device API (registration, keys, license)
+                                                                                      └─ tunnel: MASQUE or WireGuard ─> Cloudflare edge
+```
+
+The app never talks to the network itself: it runs the CLI with JSON output, and the CLI talks to the daemon
+over `/var/run/openwarp.sock` (or a per-user socket). The daemon owns the registration, the tunnel, routes and
+DNS. [CLAUDE.md](CLAUDE.md) documents the architecture and protocol details in depth.
+
+```
+cmd/openwarp/       CLI and daemon entry point, LaunchDaemon installer
 internal/api        WARP device API client
-internal/keys       curve25519 / P-256 key generation
-internal/tunnel     MASQUE (quic-go http3) and WireGuard (wireguard-go) transports
 internal/daemon     connection state machine, sessions, unix-socket control API
-internal/sysnet     macOS ifconfig/route/networksetup integration
-internal/dnsproxy   DoH/DoT stub resolver with Local Domain Fallback
-internal/proxy      SOCKS5 + HTTP proxy over the userspace netstack
+internal/tunnel     MASQUE (quic-go HTTP/3) and WireGuard (wireguard-go) transports
+internal/sysnet     macOS utun, route and DNS integration
+internal/dnsproxy   DoH/DoT stub resolver with local domain fallback
+internal/proxy      SOCKS5 and HTTP proxy over the userspace network stack
 internal/state      persisted registration and settings
-ui/macos            SwiftUI app (OpenWarp UI: theme, components, cloud, pages)
+internal/keys       Curve25519 and P-256 key generation
+ui/macos            SwiftUI app
 ```
+
+## Development
+
+```sh
+go test ./... -race -count=1     # Go unit and integration tests (offline: mock API and mock edge)
+go vet ./... && gofmt -l .       # must be clean
+./build.sh                       # full build
+```
+
+Tests never touch real Cloudflare registrations, the network configuration or root-only paths. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, including the macOS app tests.
+
+## Contributing
+
+Contributions are welcome. Every change goes through a pull request with tests and passing CI; `main` is
+protected. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, and report security problems privately as described
+in [SECURITY.md](SECURITY.md).
+
+## Known limitations
+
+- Early MVP: verified live in `proxy` mode (registration, MASQUE and WireGuard) and by the author in `warp`
+  mode on one Apple silicon Mac. Other root modes, Intel Macs and older macOS versions are untested.
+- Full-device modes change routes and DNS with `route` and `networksetup` instead of Apple's Network Extension
+  framework. If the daemon is killed while connected, the DNS settings may need to be restored by hand.
+- Trusted-network detection by SSID needs Location permission, which OpenWarp does not request yet; the
+  Wi-Fi and Ethernet switches work without it.
+- The builds are ad-hoc signed, not signed with a Developer ID or notarized, so Gatekeeper warns on first launch.
+- OpenWarp depends on Cloudflare's undocumented client API. Cloudflare can change it at any time, and whether
+  WARP works on a given network depends on that network.
+
+## License
+
+[MIT](LICENSE). Third-party Go modules keep their own licenses (MIT, BSD-3-Clause and Apache-2.0); see
+`go.mod` for the list.

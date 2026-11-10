@@ -1,4 +1,4 @@
-module github.com/local/openwarp
+module github.com/ImanMontajabi/OpenWarp
 
 go 1.27.3
 

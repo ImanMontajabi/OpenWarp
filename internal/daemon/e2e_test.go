@@ -27,8 +27,8 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
-	"github.com/local/openwarp/internal/api"
-	"github.com/local/openwarp/internal/state"
+	"github.com/ImanMontajabi/OpenWarp/internal/api"
+	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
 // mockEdge is a CONNECT-IP server whose far side is a gVisor netstack

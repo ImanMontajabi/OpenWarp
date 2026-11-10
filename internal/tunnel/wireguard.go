@@ -15,7 +15,7 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 
-	"github.com/local/openwarp/internal/keys"
+	"github.com/ImanMontajabi/OpenWarp/internal/keys"
 )
 
 type WireGuardConfig struct {

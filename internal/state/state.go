@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/local/openwarp/internal/api"
-	"github.com/local/openwarp/internal/keys"
+	"github.com/ImanMontajabi/OpenWarp/internal/api"
+	"github.com/ImanMontajabi/OpenWarp/internal/keys"
 )
 
 type Mode string

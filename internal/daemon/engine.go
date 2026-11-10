@@ -21,13 +21,13 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
-	"github.com/local/openwarp/internal/api"
-	"github.com/local/openwarp/internal/dnsproxy"
-	"github.com/local/openwarp/internal/keys"
-	"github.com/local/openwarp/internal/proxy"
-	"github.com/local/openwarp/internal/state"
-	"github.com/local/openwarp/internal/sysnet"
-	"github.com/local/openwarp/internal/tunnel"
+	"github.com/ImanMontajabi/OpenWarp/internal/api"
+	"github.com/ImanMontajabi/OpenWarp/internal/dnsproxy"
+	"github.com/ImanMontajabi/OpenWarp/internal/keys"
+	"github.com/ImanMontajabi/OpenWarp/internal/proxy"
+	"github.com/ImanMontajabi/OpenWarp/internal/state"
+	"github.com/ImanMontajabi/OpenWarp/internal/sysnet"
+	"github.com/ImanMontajabi/OpenWarp/internal/tunnel"
 )
 
 const (

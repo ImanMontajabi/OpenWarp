@@ -16,6 +16,20 @@ It has three parts, mirroring the official architecture:
 | CLI | `warp-cli` | `cmd/openwarp` |
 | GUI ("OpenWarp") | Flutter app (Home/Connectivity/Settings/Profile/About) | `ui/macos/*.swift` |
 
+## Development workflow (mandatory)
+
+Public repo: <https://github.com/ImanMontajabi/OpenWarp> (MIT). `main` is protected by a ruleset: no direct
+pushes, force pushes or deletion, and every required CI check must pass. The maintainer is the only reviewer, so
+no approval is required, but every change still goes through a PR.
+
+1. Branch from `main`: `feat/…`, `fix/…`, `refactor/…`, `test/…`, `docs/…` or `ci/…`.
+2. Write tests first where practical: a new feature gets behaviour tests, a bug fix gets a regression test that
+   fails without the fix. Never skip, disable or weaken a test to get a green build.
+3. Run the local checks (`gofmt -l .`, `go vet ./...`, `go test ./... -race -count=1`, plus the app tests when
+   `ui/macos` changes), review the diff, commit, push, open a PR using the template.
+4. Merge (squash) only when every required check is green. Never claim something is tested unless the test ran.
+5. Update `CHANGELOG.md` under `[Unreleased]` for user-visible changes.
+
 ## Commands
 
 ```sh
@@ -158,12 +172,12 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
    Apple developer signing identity.
 8. GUI: Login-item / launch at login, notifications, a proper app icon, an onboarding/ToS screen, and
    localisation (the official app ships 19 languages, including fa). The OpenWarp redesign is done (2026-11-10).
-9. ~~Initialise a git repo.~~ Done 2026-11-10 (`build/` and `.DS_Store` are ignored).
+9. ~~Initialise a git repo.~~ Done 2026-11-10; published to GitHub as ImanMontajabi/OpenWarp (MIT).
 
 ## Rename from cwarp (2026-11-10)
 
 The project was called **cwarp** until 2026-11-10 and is now **OpenWarp** everywhere: Go module
-`github.com/local/openwarp`, CLI/daemon `openwarp`, `build/OpenWarp.app` (bundle id `local.openwarp.app`),
+`github.com/ImanMontajabi/OpenWarp`, CLI/daemon `openwarp`, `build/OpenWarp.app` (bundle id `local.openwarp.app`),
 LaunchDaemon `com.local.openwarp`, socket `/var/run/openwarp.sock`, log `/var/log/openwarp.log`, env vars
 `OPENWARP_*`. Migration code:
 - `state.Open` copies `state.json` from the sibling `.../cwarp` directory into `.../openwarp` when the new one

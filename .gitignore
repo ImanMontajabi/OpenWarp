@@ -1,5 +1,23 @@
-# Build output (./build.sh)
+# Build output (./build.sh, scripts/*.sh)
 /build/
+/dist/
+
+# Xcode (OpenWarp.xcodeproj is generated from project.yml by XcodeGen)
+/OpenWarp.xcodeproj/
+DerivedData/
+*.xcresult
+xcuserdata/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Local state and secrets: never commit a daemon state directory
+state.json
+*.pem
+*.p12
+.env
 
 # macOS
 .DS_Store

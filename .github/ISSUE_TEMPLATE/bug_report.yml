@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Do not paste tokens, private keys, license keys or the contents of `state.json`.
+        Security problems go to the private advisory form instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. openwarp mode warp
+        2. openwarp connect
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenWarp version or commit
+      placeholder: "openwarp -V, or the commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Connection mode
+      options: [warp, warp+doh, warp+dot, doh, dot, proxy, tunnel_only, not relevant]
+    validations:
+      required: true
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Tunnel protocol
+      options: [MASQUE, WireGuard, not relevant]
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+      placeholder: "macOS 27.2, MacBook Pro (Apple M4)"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `/var/log/openwarp.log` or `openwarp status`, with any secrets removed.
+      render: text

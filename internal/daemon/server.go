@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/local/openwarp/internal/api"
-	"github.com/local/openwarp/internal/keys"
-	"github.com/local/openwarp/internal/state"
+	"github.com/ImanMontajabi/OpenWarp/internal/api"
+	"github.com/ImanMontajabi/OpenWarp/internal/keys"
+	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
 // SocketPath returns the control socket path. Root daemons use /var/run so

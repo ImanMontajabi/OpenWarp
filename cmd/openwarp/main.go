@@ -21,8 +21,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/local/openwarp/internal/daemon"
-	"github.com/local/openwarp/internal/state"
+	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
+	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
 const version = "0.1.0"

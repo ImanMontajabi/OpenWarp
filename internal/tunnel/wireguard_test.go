@@ -14,7 +14,7 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
-	"github.com/local/openwarp/internal/keys"
+	"github.com/ImanMontajabi/OpenWarp/internal/keys"
 )
 
 func TestWireGuardWithReservedBytes(t *testing.T) {
