@@ -104,13 +104,16 @@ struct Row<Trailing: View>: View {
                 }
             }
             .layoutPriority(1)
+            .accessibilityElement(children: .combine)
             Spacer(minLength: Space.xs)
             trailing
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
         .frame(minHeight: Metrics.rowMinHeight)
-        .accessibilityElement(children: .combine)
+        // Not .combine: that folds the trailing toggle or button into one element spanning the whole row,
+        // so it loses its own identity and a click on the element's centre lands on the text.
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -159,7 +162,12 @@ struct ValueRow: View {
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
         .frame(minHeight: Metrics.rowMinHeight)
-        .accessibilityElement(children: .combine)
+        // Explicit label and value: .combine dropped the (selectable) value and kept only the copy button.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(value ?? "Unknown")
+        .accessibilityIdentifier("value.\(title)")
+        .modifier(CopyAction(value: copyable ? value : nil, label: title))
     }
 
     private var titleText: some View {
@@ -172,6 +180,26 @@ struct ValueRow: View {
             .foregroundStyle(value == nil ? Palette.textTertiary : Palette.textSecondary)
             .textSelection(.enabled)
             .help(value ?? "")
+    }
+}
+
+/// Adds a "Copy <label>" accessibility action when there is a value to copy.
+private struct CopyAction: ViewModifier {
+    var value: String?
+    var label: String
+    func body(content: Content) -> some View {
+        if let value {
+            content.accessibilityAction(named: "Copy \(label)") { Clipboard.copy(value) }
+        } else {
+            content
+        }
+    }
+}
+
+enum Clipboard {
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
@@ -236,8 +264,7 @@ struct CopyButton: View {
     @State private var copied = false
     var body: some View {
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(value, forType: .string)
+            Clipboard.copy(value)
             copied = true
             Task { try? await Task.sleep(nanoseconds: 1_400_000_000); copied = false }
         } label: {

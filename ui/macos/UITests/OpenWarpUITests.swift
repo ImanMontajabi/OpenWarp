@@ -49,6 +49,15 @@ final class OpenWarpUITests: XCTestCase {
         return XCTWaiter().wait(for: [done], timeout: timeout) == .completed
     }
 
+    /// macOS UI tests do not scroll for you: bring an element inside the page's
+    /// scroll view (clear of the bottom navigation) before clicking it.
+    private func scrollIntoView(_ e: XCUIElement) {
+        let scroll = app.scrollViews["page.scroll"].firstMatch
+        for _ in 0..<15 where e.exists && !scroll.frame.contains(e.frame) {
+            scroll.scroll(byDeltaX: 0, deltaY: e.frame.minY < scroll.frame.minY ? 120 : -120)
+        }
+    }
+
     private func waitForStatus(_ text: String, file: StaticString = #filePath, line: UInt = #line) {
         let match = NSPredicate(format: "label == %@ OR value == %@", text, text)
         let found = expectation(for: match, evaluatedWith: statusTitle)
@@ -228,6 +237,7 @@ final class OpenWarpUITests: XCTestCase {
         row.click()
         let malware = app.buttons["choice.option.malware"]
         XCTAssertTrue(malware.waitForExistence(timeout: timeout))
+        scrollIntoView(malware)
         malware.click()
         // The row is one button whose label combines its title and current value.
         XCTAssertTrue(wait("label == %@", ["1.1.1.1 for Families, Block malware"], on: row),
@@ -243,9 +253,13 @@ final class OpenWarpUITests: XCTestCase {
         open("Profile")
         assertPageTitle("Profile")
         XCTAssertTrue(app.buttons["Change"].waitForExistence(timeout: timeout))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == 'Hidden'")).firstMatch.exists,
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == 'Hidden' OR value == 'Hidden'")).firstMatch.exists,
                       "the license key is hidden from assistive technology until revealed")
         XCTAssertGreaterThan(app.descendants(matching: .any).count, 10)
+        // Value rows read as "title, value", not just their copy button.
+        let deviceID = element("value.Device ID")
+        XCTAssertTrue(deviceID.exists, "Device ID row")
+        XCTAssertFalse((deviceID.value as? String ?? "").isEmpty, "the Device ID row exposes the ID")
         XCTAssertEqual(app.state, .runningForeground, "the app is still running")
     }
 
