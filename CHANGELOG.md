@@ -6,6 +6,21 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Upstream monitoring (repository maintenance, not part of the app): a daily workflow checks Cloudflare's
+  client changelog, security advisories, the NVD and the WARP blog, plus govulncheck and module updates and the
+  offline compatibility tests, and opens de-duplicated `upstream-monitoring` issues for what needs a maintainer
+  (`tools/upstream-monitor`, `docs/maintenance-monitoring.md`).
+- Offline compatibility tests for API response shapes and failures, the MASQUE transport (refused, silent and
+  dropped tunnels) and the edge address and port order; a manual, approval-gated live compatibility workflow
+  for proxy mode.
+
+### Changed
+
+- The weekly scheduled run of the Security workflow is replaced by the daily upstream monitor (govulncheck);
+  the Security workflow still gates every pull request.
+
 ## [0.1.0] - 2026-11-10
 
 First public version (MVP). Release notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).

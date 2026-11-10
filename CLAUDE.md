@@ -238,6 +238,17 @@ LaunchDaemon `com.local.openwarp`, socket `/var/run/openwarp.sock`, log `/var/lo
   `/usr/local/bin/cwarp` and `/var/run/cwarp.sock`.
 The project folder on disk may still be named `cwarp`; nothing depends on that name.
 
+## Upstream monitoring
+
+`.github/workflows/upstream-monitor.yml` runs `tools/upstream-monitor` (stdlib Go, not shipped) daily: Cloudflare's
+client changelog RSS, `cloudflare/advisories` repository advisories, the NVD CVE API and the WARP blog RSS, plus
+govulncheck JSON, `go list -m -u` and `go test -json ./...`. It classifies findings against OpenWarp components
+(`classify.go`), never calls an official-client fix "confirmed" for OpenWarp, and opens or comments on issues
+labelled `upstream-monitoring` (markers in the body; only `github-actions[bot]` markers are trusted; never
+closes or reopens). Its baseline is `api.MacClientVersion`. `live-compat.yml` is manual and approval-gated
+(environment `live-tests`, secret `OPENWARP_LIVE_STATE` = a dedicated test registration). Details:
+`docs/maintenance-monitoring.md`. API response fixtures for compatibility tests: `internal/api/testdata/compat`.
+
 ## Conventions & gotchas
 
 - Go 1.27, stdlib-first. The main deps are `quic-go` v0.65 (http3 `ClientConn`/`RequestStream` API) and

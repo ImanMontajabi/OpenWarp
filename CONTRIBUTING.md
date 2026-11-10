@@ -79,6 +79,14 @@ Commit re-recorded snapshot PNGs only after reviewing the visual diff, and menti
 
 CI also runs `staticcheck`, `govulncheck`, CodeQL (Go and Swift) and a secret scan; see `.github/workflows/`.
 
+## Upstream monitoring
+
+A daily workflow watches Cloudflare's official sources and OpenWarp's dependencies and opens issues labelled
+`upstream-monitoring` ([docs/maintenance-monitoring.md](docs/maintenance-monitoring.md)). Such an issue is a
+prompt to investigate, not a finding about OpenWarp: confirm the behaviour in OpenWarp with a test first, then fix
+it in a normal pull request. When Cloudflare changes an API response, add a redacted fixture of the new shape to
+`internal/api/testdata/compat` before changing the client.
+
 ## Changelog
 
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for any user-visible change.

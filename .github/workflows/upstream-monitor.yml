@@ -1,0 +1,91 @@
+name: Upstream monitor
+
+# Once a day: checks Cloudflare's official sources (client changelog, security advisories, NVD, WARP blog)
+# and OpenWarp's Go dependencies (govulncheck, available updates), runs the offline compatibility tests, and
+# opens or updates de-duplicated issues labelled "upstream-monitoring" for what needs a maintainer. The job
+# summary is the maintenance report. See docs/maintenance-monitoring.md.
+#
+# It only reports: it never changes code, pushes, merges, touches main/release or creates releases, and
+# upstream text is only ever quoted into issues (never executed or used as instructions). It is not a pull
+# request check, so an upstream outage cannot block development. The job fails (and GitHub notifies the
+# maintainer) only for a reachable vulnerability, failing offline tests, or when no source was reachable.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run (plan issues, write nothing)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Explicit bash runs steps with -eo pipefail (the implicit default has no pipefail).
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: upstream-monitor
+  cancel-in-progress: false
+
+env:
+  GOVULNCHECK_VERSION: "v1.9.0"
+
+jobs:
+  monitor:
+    name: Upstream monitor
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write # open and update the monitor's issues and create its labels
+      actions: read # when this workflow last succeeded (for the report)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The whole offline suite (API fixtures, MASQUE/WireGuard against local edges, proxy mode end to end).
+      # Failures are reported by the monitor, which then fails the job.
+      - name: Offline compatibility tests
+        run: |
+          go test -json -count=1 ./... > "$RUNNER_TEMP/gotest.json" || echo "::warning::offline tests failed (details in the report)"
+
+      # Symbol-level scan for the shipping platform. A failed scan is reported as "not run", never as clean.
+      - name: govulncheck (darwin)
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
+          if ! GOOS=darwin "$(go env GOPATH)/bin/govulncheck" -format json ./... > "$RUNNER_TEMP/govulncheck.json"; then
+            echo "::warning::govulncheck did not complete"
+            rm -f "$RUNNER_TEMP/govulncheck.json"
+          fi
+
+      - name: Available module updates
+        run: |
+          go list -m -u -json all > "$RUNNER_TEMP/modules.json" || { echo "::warning::go list -m -u failed"; rm -f "$RUNNER_TEMP/modules.json"; }
+
+      - name: Monitor
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          args=(-gotest "$RUNNER_TEMP/gotest.json" -json "$RUNNER_TEMP/report.json")
+          [ "$DRY_RUN" = true ] && args+=(-dry-run)
+          [ -s "$RUNNER_TEMP/govulncheck.json" ] && args+=(-govulncheck "$RUNNER_TEMP/govulncheck.json")
+          [ -s "$RUNNER_TEMP/modules.json" ] && args+=(-golist "$RUNNER_TEMP/modules.json")
+          go run ./tools/upstream-monitor "${args[@]}"
+
+      # The full report (every finding, including the informational ones) for 14 days; nothing is committed.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: upstream-monitor-report
+          path: ${{ runner.temp }}/report.json
+          retention-days: 14
+          if-no-files-found: ignore
