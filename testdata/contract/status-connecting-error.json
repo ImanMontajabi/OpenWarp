@@ -1,0 +1,13 @@
+{
+  "status": "Connecting",
+  "reason": "retrying in 4s",
+  "error": "dial 192.0.2.10:443: timeout",
+  "mode": "proxy",
+  "mode_label": "Local proxy (SOCKS5/HTTP)",
+  "protocol": "wireguard",
+  "registered": true,
+  "account_type": "unlimited",
+  "warp_plus": true,
+  "dns_protocol": "none",
+  "network": "Ethernet"
+}
