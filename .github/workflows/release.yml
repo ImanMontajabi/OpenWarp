@@ -1,11 +1,17 @@
 name: Release
 
-# Drafts a GitHub release from a version tag (v1.2.3) on the `release` branch. Nothing is published
-# automatically: the draft job waits for approval in the "release" environment, and the maintainer reviews
-# and publishes the draft by hand. The build is ad-hoc signed and not notarized; the draft notes say so.
+# Builds a release from the protected `release` branch and attaches it to a DRAFT GitHub release. Run it by
+# hand (Actions → Release → Run workflow, branch: release) after the main → release pull request is merged
+# and the push checks on that commit have passed. It never publishes anything and never pushes a tag: the
+# draft names tag v<version> at the exact release commit, and GitHub creates that tag only when the
+# maintainer publishes the draft. The "release" environment's approval gates the draft job.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, without the v (must match internal/buildinfo)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,41 +21,76 @@ defaults:
     shell: bash
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
 
 jobs:
   verify:
-    name: Verify the tag
+    name: Verify the release source
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    outputs:
-      version: ${{ steps.v.outputs.version }}
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - id: v
-        name: Tag matches the version and is on release
-        env:
-          TAG: ${{ github.ref_name }}
+      - name: Source is the release branch
         run: |
-          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)
-          [ "$TAG" = "v$version" ] || { echo "::error::tag $TAG does not match version $version"; exit 1; }
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/release \
-            || { echo "::error::$TAG is not on the release branch"; exit 1; }
-          grep -q "^## \[$version\] - " CHANGELOG.md || { echo "::error::CHANGELOG.md has no [$version] section"; exit 1; }
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          [ "$GITHUB_REF" = refs/heads/release ] || { echo "::error::run this workflow on the release branch, not $GITHUB_REF"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/release || { echo "::error::$GITHUB_SHA is not on release"; exit 1; }
+          echo "Release source: release @ $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Version, tag, changelog and notes
+        run: |
+          code=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)
+          [ "$VERSION" = "$code" ] || { echo "::error::input $VERSION does not match internal/buildinfo ($code)"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::tag v$VERSION already exists; published versions are never rebuilt"; exit 1
+          fi
+          grep -q "^## \[$VERSION\] - [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}$" CHANGELOG.md || { echo "::error::CHANGELOG.md has no dated [$VERSION] section"; exit 1; }
+          [ -s "docs/releases/v$VERSION.md" ] || { echo "::error::docs/releases/v$VERSION.md (release notes) is missing"; exit 1; }
+          scripts/check-repo.sh
+      # The checks the "Protect release branch" ruleset requires that also run on pushes to release.
+      - name: Required checks passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+            --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' > runs.tsv
+          missing=0
+          while IFS= read -r check; do
+            [ -n "$check" ] || continue
+            if awk -F'\t' -v n="$check" '$1 == n && $2 == "completed" && $3 == "success" {ok=1} END {exit !ok}' runs.tsv; then
+              echo "ok: $check"
+            else
+              echo "::error::required check '$check' has not passed on $GITHUB_SHA (wait for the push checks to finish)"; missing=1
+            fi
+          done <<'EOF'
+          Go lint
+          Go tests (Linux, race)
+          Go tests (macOS, race)
+          Go build (all platforms)
+          Repository checks
+          govulncheck
+          Secret scan
+          CodeQL (Go)
+          CodeQL (Swift)
+          macOS app (build, unit and snapshot tests)
+          macOS app (UI tests)
+          macOS app (distribution build)
+          EOF
+          exit "$missing"
 
-  draft:
-    name: Draft the GitHub release
+  build:
+    name: Build, package and test
     needs: verify
     runs-on: macos-26
-    timeout-minutes: 30
-    environment: release   # requires the maintainer's approval
-    permissions:
-      contents: write      # create the draft release
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,36 +100,83 @@ jobs:
           go-version-file: go.mod
       - name: build.sh
         run: ./build.sh
-      - name: Verify the bundle
+      - name: Verify the bundle and notices
         run: |
           scripts/verify-app-bundle.sh build/OpenWarp.app arm64 x86_64
           scripts/third-party-notices.sh --check
-          codesign --verify --deep --strict build/OpenWarp.app
       - name: Package
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
         run: |
-          name="OpenWarp-$VERSION-macos-universal"
-          mkdir -p dist
-          ditto -c -k --keepParent build/OpenWarp.app "dist/$name.zip"
-          (cd dist && shasum -a 256 "$name.zip" > "$name.zip.sha256" && cat "$name.zip.sha256")
+          base="OpenWarp-v$VERSION-macos-universal"
+          scripts/make-dmg.sh build/OpenWarp.app "dist/$base.dmg"
+          ditto -c -k --keepParent build/OpenWarp.app "dist/$base.zip"
+          (cd dist && shasum -a 256 "$base.dmg" "$base.zip" > SHA256SUMS.txt && shasum -a 256 -c SHA256SUMS.txt)
+          echo "$GITHUB_SHA" > dist/SOURCE_COMMIT.txt
+      - name: Verify the DMG
+        run: scripts/verify-dmg.sh "dist/OpenWarp-v$VERSION-macos-universal.dmg" "$VERSION"
+      - name: Install test (disposable runner)
+        run: scripts/ci-install-test.sh "dist/OpenWarp-v$VERSION-macos-universal.dmg" "$VERSION"
+      - name: Intel slice runs (Rosetta)
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            arch -x86_64 build/openwarp --version
+            echo "x86_64 CLI ran under Rosetta" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Rosetta is not available here; the x86_64 slices were built and checked but not run"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-v${{ inputs.version }}
+          path: dist/
+          retention-days: 30
+      - name: Diagnostics
+        if: failure()
+        run: sudo tail -n 80 /var/log/openwarp.log 2>/dev/null || true
+
+  draft:
+    name: Draft the GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release   # requires the maintainer's approval
+    permissions:
+      contents: write      # create the draft release (no tag is pushed)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-v${{ inputs.version }}
+          path: dist
+      - name: Checksums and source
+        run: |
+          (cd dist && shasum -a 256 -c SHA256SUMS.txt)
+          [ "$(cat dist/SOURCE_COMMIT.txt)" = "$GITHUB_SHA" ] || { echo "::error::artifacts were built from another commit"; exit 1; }
       - name: Release notes
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
         run: |
           {
-            awk -v v="## [$VERSION]" 'index($0, v) == 1 {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md
+            cat "docs/releases/v$VERSION.md"
             echo
-            echo "---"
-            echo "This build is ad-hoc signed and **not notarized**: macOS Gatekeeper warns on first launch."
-            echo "Verify the download against the .sha256 file."
-          } > dist/notes.md
-      - name: Create the draft
+            echo "## Checksums (SHA-256)"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+            echo
+            echo "Built from \`release\` at commit $GITHUB_SHA."
+          } > notes.md
+      - name: Create the draft (no tag yet)
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.verify.outputs.version }}
-          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" --draft --verify-tag --title "OpenWarp $VERSION" --notes-file dist/notes.md \
-            "dist/OpenWarp-$VERSION-macos-universal.zip" "dist/OpenWarp-$VERSION-macos-universal.zip.sha256"
-          echo "Draft release created for $TAG. Review and publish it by hand." >> "$GITHUB_STEP_SUMMARY"
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::a release named v$VERSION already exists (delete the old draft first)"; exit 1
+          fi
+          base="dist/OpenWarp-v$VERSION-macos-universal"
+          gh release create "v$VERSION" -R "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "OpenWarp $VERSION" --notes-file notes.md \
+            "$base.dmg" "$base.zip" dist/SHA256SUMS.txt
+          draft=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isDraft,url --jq '"\(.isDraft) \(.url)"')
+          echo "Draft: $draft" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$draft" in true\ *) ;; *) echo "::error::the release is not a draft"; exit 1 ;; esac
+          echo "Review the draft and publish it by hand; publishing creates tag v$VERSION at $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"

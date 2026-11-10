@@ -26,13 +26,21 @@ fastest way to get a change in.
   merge commit, so the history of `main` stays intact), after the "Release candidate" workflow has checked the
   version, the changelog section, the third-party notices and the universal build. Pushes, force pushes and
   deletion are blocked for everyone.
-- **Releases** start from a `v<version>` tag on `release`. The "Release" workflow builds the app and creates a
-  **draft** GitHub release only after the maintainer approves the `release` environment; publishing the draft
-  is a separate manual step. Version tags cannot be moved or deleted.
+- **Releases** are built from `release` only. After a main → release pull request is merged and the push
+  checks on that commit have passed, the maintainer runs the "Release" workflow by hand on `release` with the
+  version. It checks the version, changelog, release notes and required checks, builds the universal app, packages
+  `OpenWarp-v<version>-macos-universal.dmg` (plus a zip and `SHA256SUMS.txt`), tests the DMG and a service
+  install on the runner, and, after the maintainer approves the `release` environment, creates a **draft**
+  GitHub release that names tag `v<version>` at that commit. No tag is pushed: GitHub creates it when the
+  maintainer publishes the draft, which is a separate manual step. Version tags cannot be moved or deleted.
 
 To prepare a release (maintainer): bump the version in `internal/buildinfo/buildinfo.go`, `build.sh` and
-`FakeDaemon.version`; move the `[Unreleased]` notes to `## [x.y.z] - YYYY-MM-DD`; merge that to `main`; then
-open a pull request from `main` into `release`.
+`FakeDaemon.version`; move the `[Unreleased]` notes to `## [x.y.z] - YYYY-MM-DD`; add the release notes in
+`docs/releases/vx.y.z.md`; merge that to `main`; then open a pull request from `main` into `release`.
+
+Build a DMG locally with `./build.sh && scripts/make-dmg.sh build/OpenWarp.app dist/OpenWarp.dmg` (Finder lays
+out the window, so the first run asks to let your terminal control Finder; `OPENWARP_DMG_PLAIN=1` skips the
+layout) and check it with `scripts/verify-dmg.sh dist/OpenWarp.dmg <version>`.
 
 ## Workflow
 
