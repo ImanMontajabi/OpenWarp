@@ -26,7 +26,8 @@ macOS client (version 2026.8.2115.0) talks to the network; no Cloudflare code is
 | Registration | Register this Mac, show or delete the registration, attach a WARP+ license key, list the account's devices |
 | Settings | Split tunnel (exclude or include list), local domain fallback, 1.1.1.1 for Families, trusted Wi-Fi/Ethernet, MTU, proxy port, endpoint override, key rotation |
 | Reliability | Reconnect with backoff, endpoint and port fallback, restart on network change |
-| App | Compact window with Home, Connectivity, Settings, Profile and About pages, a cloud-shaped connect button and a menu-bar item |
+| App | Compact window with Home, Connectivity, Settings, Profile and About pages and a cloud-shaped connect button; first-run setup of the background service |
+| Menu bar | Dashboard with status, connect button, live upload/download rates and session totals, and the public IP, country and Cloudflare data centre |
 
 Not implemented: Zero Trust / Teams, MDM, DEX, device posture, the HTTP/2 fallback for MASQUE and
 hostname-based split tunnelling.
@@ -49,10 +50,15 @@ cd OpenWarp
 ./build.sh                                  # runs the Go tests, then builds build/openwarp and build/OpenWarp.app
 ```
 
-Install the daemon as a LaunchDaemon (runs as root), register, and connect:
+The easiest way is to open `build/OpenWarp.app` (move it to `/Applications` first) and click **Install
+Background Service**. macOS asks for an administrator password in its own dialog; OpenWarp never sees it. The app
+then checks that the service is running before it continues.
+
+From Terminal instead, install the daemon as a LaunchDaemon (runs as root), register, and connect:
 
 ```sh
-sudo ./build/openwarp service install      # installs /usr/local/bin/openwarp, logs to /var/log/openwarp.log
+sudo ./build/openwarp service install      # copies the daemon to /Library/PrivilegedHelperTools, links /usr/local/bin/openwarp
+openwarp service status                    # installed, loaded, running and up to date? (no root needed)
 openwarp registration new --accept-tos
 openwarp connect
 openwarp status
@@ -126,6 +132,11 @@ in [SECURITY.md](SECURITY.md).
   framework. If the daemon is killed while connected, the DNS settings may need to be restored by hand.
 - Trusted-network detection by SSID needs Location permission, which OpenWarp does not request yet; the
   Wi-Fi and Ethernet switches work without it.
+- The menu bar's public IP lookup sends a request to `www.cloudflare.com/cdn-cgi/trace` (at most every five
+  minutes, and when the connection changes). Turn it off in Settings → Privacy. Cloudflare reports a country and
+  data centre, not a city.
+- The in-app service installer uses an AppleScript administrator prompt, not `SMAppService`, because that needs a
+  Developer ID–signed app. It trusts the app bundle it runs from, so install only from a copy you built or trust.
 - The builds are ad-hoc signed, not signed with a Developer ID or notarized, so Gatekeeper warns on first launch.
 - OpenWarp depends on Cloudflare's undocumented client API. Cloudflare can change it at any time, and whether
   WARP works on a given network depends on that network.

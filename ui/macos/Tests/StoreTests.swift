@@ -153,3 +153,112 @@ final class StateMappingTests: XCTestCase {
         XCTAssertNotEqual(Tint(accent: accent, engaged: true).background, Tint(accent: accent, engaged: false).background)
     }
 }
+
+/// The state the menu bar dashboard and the main window share.
+extension StoreTests {
+    // MARK: dashboard state
+
+    private func status(_ file: String, edit: (inout [String: Any]) -> Void) throws -> Data {
+        var obj = try JSONSerialization.jsonObject(with: Contract.data(file)) as! [String: Any]
+        edit(&obj)
+        return try JSONSerialization.data(withJSONObject: obj)
+    }
+
+    func testTunnelRateComesFromUsageAndStartsOverForANewConnection() async throws {
+        var now = Date(timeIntervalSince1970: 5000)
+        let store = Store(backend: backend, polling: false, interfaceCounters: { [] }, clock: { now })
+        func poll(tx: Int, rx: Int, since: String = "2026-01-02T03:04:05Z") async throws {
+            await backend.respond(["status"], json: try status("status-connected.json") {
+                $0["usage"] = ["tx_bytes": tx, "rx_bytes": rx, "since": since]
+            })
+            await store.refreshStatus()
+        }
+        try await poll(tx: 1_000, rx: 10_000)
+        XCTAssertNil(store.tunnelRates, "one sample is not a rate")
+        now.addTimeInterval(2)
+        try await poll(tx: 5_000, rx: 2_010_000)
+        XCTAssertEqual(store.tunnelRates, Rates(up: 2_000, down: 1_000_000))
+        now.addTimeInterval(2)
+        try await poll(tx: 100, rx: 100, since: "2026-01-02T04:00:00Z")
+        XCTAssertNil(store.tunnelRates, "a reconnect by the user starts a new count, never a negative rate")
+
+        try await backend.respond(["status"], fixture: "status-unregistered.json")
+        await store.refreshStatus()
+        XCTAssertNil(store.tunnelRates, "no tunnel rate while disconnected")
+    }
+
+    func testSystemRateIsMeasuredEvenWhenTheDaemonIsDown() async {
+        var now = Date(timeIntervalSince1970: 5000)
+        var rx: UInt32 = 0
+        let store = Store(backend: backend, polling: false,
+                          interfaceCounters: { [InterfaceCounters(name: "en0", rx: rx, tx: 0)] }, clock: { now })
+        await backend.fail(["status"], "cannot reach the openwarp daemon")
+        await store.refreshStatus()
+        now.addTimeInterval(1); rx = 3_000_000
+        await store.refreshStatus()
+        XCTAssertEqual(store.systemRates, Rates(up: 0, down: 3_000_000))
+        XCTAssertNil(store.tunnelRates)
+    }
+
+    func testButtonStatesCoverEveryDaemonState() async throws {
+        await backend.fail(["status"], "cannot reach the openwarp daemon")
+        await store.refreshStatus()
+        XCTAssertEqual(store.buttonState, .unavailable)
+
+        try await backend.respond(["status"], fixture: "status-unregistered.json")
+        await backend.fail(["registration", "show"], "not registered")
+        await store.refreshAll()
+        XCTAssertEqual(store.buttonState, .unregistered)
+        XCTAssertFalse(store.buttonState.stops)
+
+        let states: [(String, String?, ButtonState)] = [
+            ("Disconnected", nil, .disconnected), ("Connecting", nil, .connecting), ("Connecting", "timeout", .retrying),
+            ("Connected", nil, .connected), ("Paused", nil, .paused),
+        ]
+        for (st, err, want) in states {
+            await backend.respond(["status"], json: try status("status-connected.json") { $0["status"] = st; $0["error"] = err })
+            await store.refreshStatus()
+            XCTAssertEqual(store.buttonState, want, st)
+        }
+        XCTAssertTrue(ButtonState.connected.stops && ButtonState.connecting.stops && ButtonState.retrying.stops)
+    }
+
+    func testDisconnectShowsDisconnectingUntilTheDaemonAnswers() async throws {
+        try await backend.respond(["status"], fixture: "status-connected.json")
+        await store.refreshAll()
+        XCTAssertEqual(store.buttonState, .connected)
+        let task = store.toggle()
+        XCTAssertEqual(store.buttonState, .disconnecting, "immediate feedback while the CLI runs")
+        XCTAssertFalse(store.buttonState.enabled, "no double clicks")
+        try await backend.respond(["status"], fixture: "status-unregistered.json")
+        await task.value
+        XCTAssertNil(store.pendingAction)
+        XCTAssertEqual(store.connState, .disconnected)
+    }
+
+    func testFailedConnectEndsTheConnectingStateWithAnError() async throws {
+        await backend.respond(["status"], json: try status("status-connected.json") { $0["status"] = "Disconnected" })
+        await store.refreshAll()
+        XCTAssertEqual(store.buttonState, .disconnected)
+        await backend.fail(["connect"], "not registered: run `openwarp registration new`")
+        let task = store.toggle()
+        XCTAssertEqual(store.buttonState, .connecting)
+        await task.value
+        XCTAssertNil(store.pendingAction)
+        XCTAssertEqual(store.toast?.kind, .error)
+        XCTAssertNotEqual(store.buttonState, .connecting)
+    }
+
+    /// The menu bar dashboard and the main window's cloud read one Store, so an
+    /// action in either shows up in both, with no second poller.
+    func testMenuBarAndMainWindowShareOneState() async throws {
+        await store.refreshAll()
+        let dashboardToggle = { self.store.toggle() }   // what DashboardButton calls
+        try await backend.respond(["status"], fixture: "status-connected.json")
+        await dashboardToggle().value
+        XCTAssertEqual(store.buttonState, .connected)
+        XCTAssertEqual(CloudLook(store.connState, registered: store.registered), .connected, "the cloud shows it too")
+        let commands = await backend.commands
+        XCTAssertEqual(commands, [["connect"]])
+    }
+}

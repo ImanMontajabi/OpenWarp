@@ -10,6 +10,7 @@ private enum Sheet: String, Identifiable {
 
 struct SettingsView: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var location: LocationModel
     @State private var sheet: Sheet?
     @State private var port = ""
     @State private var endpoint = ""
@@ -64,6 +65,17 @@ struct SettingsView: View {
                 Row(icon: "arrow.triangle.branch", title: "Split Tunnel",
                     subtitle: "Choose which traffic bypasses Cloudflare's network (\(s?.split_mode ?? "exclude") mode).") {
                     Button("Configure") { sheet = .split }.buttonStyle(.flat())
+                }
+            }
+
+            CardSection(title: "Privacy") {
+                Row(icon: "globe", title: "Show public IP and location",
+                    subtitle: "While the menu bar dashboard is open, ask Cloudflare (cloudflare.com/cdn-cgi/trace) which address it sees.") {
+                    Toggle("", isOn: $location.enabled)
+                        .toggleStyle(PillToggleStyle())
+                        .labelsHidden()
+                        .accessibilityLabel("Show public IP and location")
+                        .accessibilityIdentifier("toggle.lookup_public_ip")
                 }
             }
 

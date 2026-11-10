@@ -20,6 +20,7 @@ enum Tab: String, CaseIterable, Identifiable {
 
 struct RootView: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var setup: SetupModel
     @State private var tab: Tab
     @Environment(\.owReduceMotion) private var reduce
 
@@ -30,10 +31,11 @@ struct RootView: View {
     var body: some View {
         VStack(spacing: 0) {
             TitleArea()
+            ServiceUpdateBanner()
             ZStack {
                 Group {
-                    if let err = store.daemonError, tab != .about {
-                        DaemonDownView(error: err)
+                    if store.daemonError != nil, tab != .about {
+                        OnboardingView()
                     } else {
                         switch tab {
                         case .home: HomeView()
@@ -71,6 +73,9 @@ struct RootView: View {
         .background(WindowConfigurator())
         .frame(minWidth: Metrics.minWidth, maxWidth: Metrics.maxWidth, minHeight: Metrics.minHeight)
         .preferredColorScheme(.dark)
+        // Re-check the service when the daemon goes away or comes back (and once at launch).
+        .onChange(of: store.daemonError == nil) { if !setup.phase.busy { setup.check() } }
+        .task { if setup.phase == .checking { setup.check() } }
     }
 }
 
@@ -166,32 +171,5 @@ struct BottomNav: View {
         .padding(.vertical, Space.xs)
         .frame(height: Metrics.navHeight + Space.xs)
         .overlay(alignment: .top) { Rectangle().fill(Palette.hairline).frame(height: 1) }
-    }
-}
-
-// MARK: - Daemon not reachable
-
-struct DaemonDownView: View {
-    var error: String
-    var body: some View {
-        Page(centered: true) {
-            VStack(spacing: Space.md) {
-                Image(systemName: "bolt.horizontal.circle").font(.system(size: 40, weight: .regular))
-                    .foregroundStyle(Palette.warning.color)
-                Text("The OpenWarp service is not running").font(.system(size: 17, weight: .semibold))
-                    .multilineTextAlignment(.center)
-                    .accessibilityIdentifier("daemon.down")
-                Text("Install it once with:").font(Typo.caption).foregroundStyle(Palette.textSecondary)
-                HStack(spacing: Space.xs) {
-                    Text("sudo \(CLI.path) service install").font(Typo.mono).textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                    CopyButton(value: "sudo \(CLI.path) service install", label: "command")
-                }
-                .padding(Space.sm)
-                .background(Palette.raised.color, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
-                Text(error).font(Typo.caption).foregroundStyle(Palette.textTertiary).multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-        }
     }
 }

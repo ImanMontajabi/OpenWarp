@@ -76,10 +76,48 @@ final class SnapshotTests: XCTestCase {
         try assertSnapshot("profile", tab: .profile, status: "status-connected.json")
     }
 
+    /// First run: the service is not installed, so the main window shows setup.
     func testDaemonDown() throws {
         let store = Store(backend: MockBackend(), polling: false)
         store.daemonError = "cannot reach the openwarp daemon at /var/run/openwarp.sock"
-        try compare("daemon-down", render(RootView(initialTab: .home).environmentObject(store)))
+        try compare("daemon-down", render(window(RootView(initialTab: .home), store: store, setup: setup(.needed(.notInstalled)))))
+    }
+
+    func testOnboardingInstallFailed() throws {
+        let store = Store(backend: MockBackend(), polling: false)
+        store.daemonError = "cannot reach the openwarp daemon at /var/run/openwarp.sock"
+        let s = setup(.failed("The service is installed but did not start. See /var/log/openwarp.log."))
+        try compare("onboarding-failed", render(window(RootView(initialTab: .home), store: store, setup: s)))
+    }
+
+    // MARK: menu bar dashboard
+
+    func testDashboardConnected() throws {
+        let store = try connectedStore(mode: "warp+doh")
+        let loc = location(direct: "ip=198.51.100.7\nloc=DE\ncolo=FRA\nwarp=on\n")
+        try compare("dashboard-connected", render(dashboard(store, loc), fit: true))
+    }
+
+    func testDashboardProxyMode() throws {
+        let store = try connectedStore(mode: "proxy") { $0["proxy"] = "127.0.0.1:40000"; $0["interface"] = nil }
+        let loc = location(proxied: "ip=198.51.100.7\nloc=DE\ncolo=FRA\nwarp=on\n")
+        try compare("dashboard-proxy", render(dashboard(store, loc), fit: true))
+    }
+
+    func testDashboardDisconnected() throws {
+        let store = Store(backend: MockBackend(), polling: false, interfaceCounters: { [] })
+        store.status = try Contract.decode(Status.self, "status-unregistered.json")
+        store.status?.registered = true
+        store.settings = try Contract.decode(Settings.self, "settings-default.json")
+        try compare("dashboard-disconnected", render(dashboard(store, location()), fit: true))
+    }
+
+    func testDashboardServiceNotSetUp() throws {
+        let store = Store(backend: MockBackend(), polling: false, interfaceCounters: { [] })
+        store.daemonError = "cannot reach the openwarp daemon at /var/run/openwarp.sock"
+        let loc = location()
+        loc.enabled = false
+        try compare("dashboard-not-set-up", render(dashboard(store, loc), fit: true))
     }
 
     // MARK: helpers
@@ -93,22 +131,84 @@ final class SnapshotTests: XCTestCase {
             store.devices = try Contract.decode([Device].self, "devices.json")
             store.devicesLoaded = true
         }
-        try compare(name, render(RootView(initialTab: tab).environmentObject(store)))
+        try compare(name, render(window(RootView(initialTab: tab), store: store, setup: setup(.ready))))
     }
 
-    private func render<V: View>(_ view: V) -> NSBitmapImageRep {
-        let size = Self.size
-        let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
+    private func window<V: View>(_ view: V, store: Store, setup: SetupModel) -> some View {
+        view.environmentObject(store).environmentObject(setup).environmentObject(location())
+    }
+
+    private func setup(_ phase: SetupPhase) -> SetupModel {
+        let backend = MockBackend()
+        let m = SetupModel(backend: backend, installer: SetupTests.ScriptedInstaller(result: .cancelled))
+        m.phaseForTesting = phase
+        return m
+    }
+
+    /// A location model whose lookups (made by the dashboard when it appears) get these answers.
+    /// The default direct answer is 203.0.113.10 in the Netherlands, without WARP.
+    private func location(direct: String? = nil, proxied: String? = nil) -> LocationModel {
+        let trace = NetworkLocationTests.ScriptedTrace()
+        Task {
+            if let direct { await trace.set(nil, direct) }
+            if let proxied { await trace.set("127.0.0.1:40000", proxied) }
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        return LocationModel(fetcher: trace, defaults: UserDefaults(suiteName: "openwarp.snapshots.\(UUID())")!)
+    }
+
+    /// A store that has seen two status polls 1.5 s apart, so it has real rates.
+    private func connectedStore(mode: String, edit: (inout [String: Any]) -> Void = { _ in }) throws -> Store {
+        let backend = MockBackend()
+        var now = Date(timeIntervalSince1970: 5000)
+        var rx: UInt32 = 1_000_000
+        let store = Store(backend: backend, polling: false,
+                          interfaceCounters: { [InterfaceCounters(name: "en0", rx: rx, tx: rx / 9)] }, clock: { now })
+        func poll(_ tx: Int, _ rxBytes: Int) throws {
+            var obj = try Contract.object("status-connected.json") as! [String: Any]
+            obj["mode"] = mode
+            obj["mode_label"] = ModeInfo.find(mode).fullName
+            obj["usage"] = ["tx_bytes": tx, "rx_bytes": rxBytes, "since": "2026-01-02T03:04:05Z"]
+            edit(&obj)
+            store.status = try JSONDecoder().decode(Status.self, from: JSONSerialization.data(withJSONObject: obj))
+            store.recordSampleForTesting()
+        }
+        try poll(127_000_000, 1_195_000_000)
+        now.addTimeInterval(1.5); rx += 3_900_000
+        try poll(127_510_000, 1_198_600_000)   // 340 KB/s up, 2.4 MB/s down
+        store.settings = try Contract.decode(Settings.self, "settings-default.json")
+        store.registration = try Contract.decode(Registration.self, "registration.json")
+        return store
+    }
+
+    private func dashboard(_ store: Store, _ loc: LocationModel) -> some View {
+        DashboardView().environmentObject(store).environmentObject(loc).environmentObject(setup(.ready))
+    }
+
+    /// Renders at the window size, or with `fit` at the view's own height once it has settled
+    /// (the menu bar panel sizes itself to its content).
+    private func render<V: View>(_ view: V, fit: Bool = false) -> NSBitmapImageRep {
+        var size = fit ? CGSize(width: DashboardView.width, height: 1200) : Self.size
+        let host = NSHostingView(rootView: fit ? AnyView(view.frame(width: size.width)) : AnyView(view.frame(width: size.width, height: size.height)))
         host.frame = CGRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false   // ARC owns it; close() must not release it again
         window.colorSpace = .sRGB
         window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = host
-        // Let SwiftUI finish layout and any (reduced, 0.12s) transitions.
+        // Let SwiftUI finish layout, lookups and any (reduced, 0.12s) transitions.
         for _ in 0..<5 {
             host.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        if fit {
+            size.height = ceil(host.fittingSize.height)
+            window.setContentSize(size)
+            host.frame = CGRect(origin: .zero, size: size)
+            for _ in 0..<2 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            }
         }
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * Self.scale),
                                    pixelsHigh: Int(size.height * Self.scale), bitsPerSample: 8, samplesPerPixel: 4,
