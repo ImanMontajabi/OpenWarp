@@ -164,6 +164,7 @@ struct ValueRow: View {
         .frame(minHeight: Metrics.rowMinHeight)
         // Explicit label and value: .combine dropped the (selectable) value and kept only the copy button.
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)   // a plain group exposes no value on macOS
         .accessibilityLabel(title)
         .accessibilityValue(value ?? "Unknown")
         .accessibilityIdentifier("value.\(title)")

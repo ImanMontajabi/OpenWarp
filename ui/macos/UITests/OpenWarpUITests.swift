@@ -259,7 +259,8 @@ final class OpenWarpUITests: XCTestCase {
         // Value rows read as "title, value", not just their copy button.
         let deviceID = element("value.Device ID")
         XCTAssertTrue(deviceID.exists, "Device ID row")
-        XCTAssertFalse((deviceID.value as? String ?? "").isEmpty, "the Device ID row exposes the ID")
+        let spoken = deviceID.label + " " + (deviceID.value as? String ?? "")
+        XCTAssertTrue(spoken.contains("00000000-0000-4000-8000-000000000001"), "the Device ID row exposes the ID: \(spoken)")
         XCTAssertEqual(app.state, .runningForeground, "the app is still running")
     }
 
@@ -277,6 +278,8 @@ final class OpenWarpUITests: XCTestCase {
         field.typeText("NOT-A-KEY-AT-ALL\r")
         let toast = element("toast.error")
         XCTAssertTrue(toast.waitForExistence(timeout: timeout), "no error toast")
-        XCTAssertTrue(toast.label.contains("Invalid license key") || app.staticTexts["Invalid license key"].exists)
+        let invalid = NSPredicate(format: "label CONTAINS 'Invalid license key' OR value CONTAINS 'Invalid license key'")
+        XCTAssertTrue(text(toast).contains("Invalid license key") ||
+                      toast.descendants(matching: .any).matching(invalid).count > 0, "toast says \(text(toast))")
     }
 }
