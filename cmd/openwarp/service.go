@@ -108,14 +108,15 @@ func rootOnly(path string, lstat func(string) (fs.FileInfo, error)) error {
 		if !ok {
 			return fmt.Errorf("%s: cannot read the owner", p)
 		}
+		// Symlink first: a symlink's own permission bits are always 0777 and say nothing.
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", p)
+		}
 		if st.Uid != 0 {
 			return fmt.Errorf("%s is owned by uid %d, not root", p, st.Uid)
 		}
 		if fi.Mode().Perm()&0o022 != 0 {
 			return fmt.Errorf("%s is writable by non-root users (mode %v)", p, fi.Mode().Perm())
-		}
-		if fi.Mode()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink", p)
 		}
 		if p == "/" {
 			return nil

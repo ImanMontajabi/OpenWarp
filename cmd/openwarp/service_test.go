@@ -77,6 +77,11 @@ func TestRootOnlyRejectsFilesOtherUsersCanReplace(t *testing.T) {
 			t.Errorf("%s: err = %v, want ok=%v", c.name, err, c.ok)
 		}
 	}
+	// A symlink's own permission bits are always 0777: it must be reported as a symlink, not as writable.
+	err := rootOnly(bin, tree(map[string]fakeInfo{bin: {mode: fs.ModeSymlink | 0o777}}))
+	if err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Errorf("symlink with 0777 bits: err = %v, want \"is a symlink\"", err)
+	}
 	if err := rootOnly(bin, func(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist }); err == nil {
 		t.Error("a missing file passed")
 	}
@@ -86,8 +91,13 @@ func TestRootOnlyOnRealPaths(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: every temp dir is root-owned")
 	}
-	if err := rootOnly("/usr/bin/true", os.Lstat); err != nil {
-		t.Errorf("/usr/bin/true: %v", err)
+	// /usr/bin/true is a symlink on some Linux distributions (rust-coreutils); its target is a root-owned file.
+	real, err := filepath.EvalSymlinks("/usr/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rootOnly(real, os.Lstat); err != nil {
+		t.Errorf("%s: %v", real, err)
 	}
 	f := filepath.Join(t.TempDir(), "openwarp")
 	os.WriteFile(f, nil, 0o755)
