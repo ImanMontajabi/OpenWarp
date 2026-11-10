@@ -7,11 +7,13 @@ import XCTest
 /// __Snapshots__/. Reduce Motion is forced so continuous animations cannot make
 /// frames differ, and rendering is at a fixed 2x scale in sRGB.
 ///
-/// Font rasterisation changes between macOS releases, so goldens are only
-/// compared on the macOS major version they were recorded on (RECORDED_ON);
-/// elsewhere the test is skipped, visibly. Record or update goldens with
-///   OPENWARP_RECORD_SNAPSHOTS=1 xcodebuild test -scheme OpenWarp -only-testing:OpenWarpTests/SnapshotTests
-/// (in Xcode: set the variable in the scheme), then review the PNG diff before committing.
+/// Text metrics change even between macOS point releases (a label that fits on
+/// 27.2 wraps on 27.0.1), so goldens live in one folder per exact OS version
+/// (__Snapshots__/macOS-27.0.1/ for the CI image, others for maintainers' Macs).
+/// Without goldens for the running version the tests are skipped, and the CI
+/// workflow turns that skip into a warning. Record with `scripts/test-app.sh
+/// record` (or the macOS workflow's record_snapshots input for the CI image),
+/// then review the PNG diff before committing.
 @MainActor
 final class SnapshotTests: XCTestCase {
     static let size = CGSize(width: Metrics.windowWidth, height: Metrics.windowHeight)
@@ -21,22 +23,22 @@ final class SnapshotTests: XCTestCase {
     /// The test fails when more than this fraction of pixels differ.
     static let maxDifferingFraction = 0.002
 
+    static var osVersion: String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "macOS-\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+    }
     static let goldens = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        .appendingPathComponent("__Snapshots__")
+        .appendingPathComponent("__Snapshots__").appendingPathComponent(osVersion)
     static var recording: Bool { ProcessInfo.processInfo.environment["OPENWARP_RECORD_SNAPSHOTS"] == "1" }
-    static var osMajor: String { "macOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)" }
 
     override func setUp() async throws {
         Motion.forceReduced = true
         if Self.recording {
             try FileManager.default.createDirectory(at: Self.goldens, withIntermediateDirectories: true)
-            try Self.osMajor.write(to: Self.goldens.appendingPathComponent("RECORDED_ON"), atomically: true, encoding: .utf8)
             return
         }
-        let recordedOn = (try? String(contentsOf: Self.goldens.appendingPathComponent("RECORDED_ON"), encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard recordedOn == Self.osMajor else {
-            throw XCTSkip("goldens were recorded on \(recordedOn ?? "nothing"), this is \(Self.osMajor)")
+        guard FileManager.default.fileExists(atPath: Self.goldens.path) else {
+            throw XCTSkip("no snapshot goldens for \(Self.osVersion); record them with scripts/test-app.sh record")
         }
     }
 
@@ -117,6 +119,7 @@ final class SnapshotTests: XCTestCase {
         let png = try XCTUnwrap(actual.representation(using: .png, properties: [:]))
         if Self.recording {
             try png.write(to: url)
+            save(png, "\(name).png")
             return
         }
         guard let goldenData = try? Data(contentsOf: url), let golden = NSBitmapImageRep(data: goldenData) else {
@@ -128,7 +131,7 @@ final class SnapshotTests: XCTestCase {
         if fraction > Self.maxDifferingFraction {
             attach(png, "\(name)-actual")
             attach(goldenData, "\(name)-golden")
-            save(png, "\(name)-actual.png")
+            save(png, "\(name).png")
             XCTFail("\(name): \(differing) of \(total) pixels differ (\(String(format: "%.3f", fraction * 100))%)")
         }
     }

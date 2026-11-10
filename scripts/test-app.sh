@@ -15,8 +15,8 @@ run() { xcodebuild -project OpenWarp.xcodeproj -destination 'platform=macOS' -de
 
 case "${1:-}" in
   record)
-    OPENWARP_RECORD_SNAPSHOTS=1 TEST_RUNNER_OPENWARP_RECORD_SNAPSHOTS=1 \
-      run -scheme OpenWarp test -only-testing:OpenWarpTests/SnapshotTests
+    # Goldens are per exact macOS version: this writes ui/macos/Tests/__Snapshots__/macOS-<this version>/.
+    TEST_RUNNER_OPENWARP_RECORD_SNAPSHOTS=1 run -scheme OpenWarp test -only-testing:OpenWarpTests/SnapshotTests
     git status --short ui/macos/Tests/__Snapshots__ ;;
   ui)
     run -scheme OpenWarp test

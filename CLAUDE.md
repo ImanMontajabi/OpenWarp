@@ -62,7 +62,9 @@ App tests (`scripts/test-app.sh [ui|record]`):
   - `ContractTests`: decode `testdata/contract/*.json`, the exact `openwarp -j` output written by
     `go test ./cmd/openwarp -run TestCLIJSONContract -update`.
   - `FakeDaemonFidelityTests`, `StoreTests` (with `MockBackend`), `CLIProcessTests`.
-  - `SnapshotTests`: PNG goldens in `__Snapshots__`, compared only on the macOS major in `RECORDED_ON`.
+  - `SnapshotTests`: PNG goldens in `__Snapshots__/macOS-<exact version>/` (text metrics differ even between
+    point releases). `macOS-27.0.1` matches the CI `xcode-27` image. Other versions skip; CI turns the skip into
+    a warning. Re-record with `scripts/test-app.sh record` or the macOS workflow's `record_snapshots` input.
 - `ui/macos/UITests`: XCUITest. Launching with `OPENWARP_UITEST_SCENARIO` (`registered`, `unregistered`,
   `connect-fails`, `daemon-down`) makes `Store.forLaunch()` use `FakeDaemon` and force Reduce Motion.
   `FakeDaemon.swift` is `#if DEBUG` only.
