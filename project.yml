@@ -30,6 +30,11 @@ targets:
     sources:
       - path: ui/macos
         excludes: ["Tests/**", "UITests/**", "legacy-backup/**"]
+      # Shipped license texts, as in build.sh (checked by scripts/verify-app-bundle.sh).
+      - path: LICENSE
+        buildPhase: resources
+      - path: THIRD_PARTY_NOTICES.md
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: OpenWarp
