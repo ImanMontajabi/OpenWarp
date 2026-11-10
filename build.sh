@@ -23,6 +23,10 @@ swiftc -O -parse-as-library -target x86_64-apple-macos14.0 ui/macos/*.swift -o b
 lipo -create -output "$APP/Contents/MacOS/OpenWarp" build/OpenWarp-arm64 build/OpenWarp-x86_64
 rm build/OpenWarp-arm64 build/OpenWarp-x86_64
 cp build/openwarp "$APP/Contents/Resources/openwarp"
+# App icon: compile the asset catalog (Assets.car + AppIcon.icns) from ui/macos/Assets.xcassets.
+xcrun actool ui/macos/Assets.xcassets --compile "$APP/Contents/Resources" --platform macosx \
+  --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist build/assets-info.plist >/dev/null
+rm -f build/assets-info.plist
 cat > "$APP/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -33,6 +37,8 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>CFBundleName</key><string>OpenWarp</string>
   <key>CFBundleDisplayName</key><string>OpenWarp</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>

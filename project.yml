@@ -40,6 +40,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: OpenWarp
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Iman Montajabi. MIT License."
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
         UITest:
           PRODUCT_BUNDLE_IDENTIFIER: local.openwarp.app.uitest
@@ -48,7 +49,7 @@ targets:
     platform: macOS
     sources:
       - path: ui/macos
-        excludes: ["OpenWarpApp.swift", "UITests/**", "legacy-backup/**"]
+        excludes: ["OpenWarpApp.swift", "Assets.xcassets", "UITests/**", "legacy-backup/**"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.openwarp.tests

@@ -13,6 +13,7 @@ First public version, not yet released.
 - Go daemon and `openwarp` CLI compatible with the Cloudflare WARP consumer service: device registration, WARP+
   license keys, device list, MASQUE and WireGuard tunnels, and all seven connection modes.
 - SwiftUI app (OpenWarp) with Home, Connectivity, Settings, Profile and About pages and a menu-bar item.
+- App icon (from `assets/icon`) in every macOS size; the menu-bar item keeps a monochrome symbol.
 - Registration as a macOS device (`type` macOS, `model` from `hw.model`).
 - LaunchDaemon installer (`openwarp service install|uninstall`) that also removes the pre-rename `cwarp` service.
 - Open-source publication: MIT license, contributing guide, security policy, issue and PR templates.
