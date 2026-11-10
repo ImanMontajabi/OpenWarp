@@ -1,0 +1,131 @@
+name: CI
+
+# Runs on every pull request into main, on pushes to main and on demand. Every job here is a required status
+# check in the "Protect main" ruleset, so job names are part of the contract: rename them only together with
+# the ruleset. No path filters: a required check that never reports would block the PR forever.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Explicit bash runs steps with -eo pipefail (the implicit default has no pipefail).
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  STATICCHECK_VERSION: "2026.2.2"
+  ACTIONLINT_VERSION: "v1.7.12"
+
+jobs:
+  go-lint:
+    name: Go lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "::error::gofmt needed:"; echo "$out"; exit 1; fi
+
+      - name: go mod tidy and verify
+        run: |
+          go mod verify
+          go mod tidy
+          git diff --exit-code go.mod go.sum || { echo "::error::run 'go mod tidy' and commit go.mod/go.sum"; exit 1; }
+
+      # Most of the daemon is macOS-only (//go:build darwin), so vet and staticcheck run for darwin and linux.
+      - name: go vet
+        run: |
+          GOOS=darwin go vet ./...
+          GOOS=linux go vet ./...
+
+      - name: staticcheck
+        run: |
+          go install "honnef.co/go/tools/cmd/staticcheck@$STATICCHECK_VERSION"
+          GOOS=darwin "$(go env GOPATH)/bin/staticcheck" ./...
+          GOOS=linux "$(go env GOPATH)/bin/staticcheck" ./...
+
+  go-test-linux:
+    name: Go tests (Linux, race)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: go test
+        run: go test ./... -race -count=1 -coverprofile="$RUNNER_TEMP/cover.out"
+      - name: Coverage summary
+        run: go tool cover -func="$RUNNER_TEMP/cover.out" | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
+
+  go-test-macos:
+    name: Go tests (macOS, race)
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The tests are offline and unprivileged: mock API, mock edge, userspace netstack. No routes or DNS change.
+      - name: go test
+        run: go test ./... -race -count=1
+
+  go-build:
+    name: Go build (all platforms)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # macOS is the product; Linux and Windows must keep compiling so the stubs stay in sync.
+      - name: Cross-compile openwarp
+        run: |
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+            echo "building $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build -trimpath -o /dev/null ./cmd/openwarp
+          done
+
+  repo:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: actionlint
+        run: |
+          go install "github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION"
+          "$(go env GOPATH)/bin/actionlint" -color
+      - name: Project files, versions and fixtures
+        run: scripts/check-repo.sh
