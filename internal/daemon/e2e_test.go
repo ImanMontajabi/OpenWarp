@@ -111,6 +111,7 @@ func mockAPI(t *testing.T, edgePEM string) (*httptest.Server, *sync.Map) {
 		var in map[string]any
 		json.NewDecoder(r.Body).Decode(&in)
 		calls.Store("register", in)
+		calls.Store("register-client-version", r.Header.Get("CF-Client-Version"))
 		if r.Header.Get("CF-Client-Version") == "" {
 			w.WriteHeader(400)
 			return
@@ -248,12 +249,20 @@ func TestEndToEndProxyModeOverMasque(t *testing.T) {
 	if p, ok := calls.Load("patch"); !ok || p.(map[string]string)["key_type"] != "secp256r1" {
 		t.Fatalf("MASQUE key was not enrolled: %v", p)
 	}
-	// With the macOS identity, registration and key enrollment go through
-	// the enveloped /v0/ API (no silent fallback to the Android paths).
-	for _, k := range []string{"v0:POST reg", "v0:PATCH reg/reg-1"} {
-		if cv, ok := calls.Load(k); !ok || cv != api.MacClientVersion {
-			t.Fatalf("%s not sent with the macOS identity (got %v)", k, cv)
+	// Key enrollment uses the client's identity (macOS here) through the
+	// enveloped /v0/ API, with no silent fallback to the Android paths.
+	if cv, ok := calls.Load("v0:PATCH reg/reg-1"); !ok || cv != api.MacClientVersion {
+		t.Fatalf("key enrollment not sent with the macOS identity (got %v)", cv)
+	}
+	// Registration uses the identity matching the device type: macOS on a Mac,
+	// the default (Android) identity elsewhere, e.g. the Linux CI runner.
+	cv, _ := calls.Load("register-client-version")
+	if typ, _ := deviceIdentity(); typ == "macOS" {
+		if v0, ok := calls.Load("v0:POST reg"); !ok || v0 != api.MacClientVersion || cv != api.MacClientVersion {
+			t.Fatalf("registration not sent with the macOS identity (got %v)", v0)
 		}
+	} else if _, viaV0 := calls.Load("v0:POST reg"); viaV0 || cv != api.ClientVersion {
+		t.Fatalf("%s registration should use the default identity (via v0: %v, client version %v)", typ, viaV0, cv)
 	}
 
 	for _, scheme := range []string{"socks5", "http"} {

@@ -1,0 +1,22 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "account_id": "00000000-0000-4000-8000-000000000002",
+  "account_type": "free",
+  "warp_plus": false,
+  "premium_data": 0,
+  "quota": 0,
+  "license": "TEST0000-TEST0000-TEST0000",
+  "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "key_type": "curve25519",
+  "interface_v4": "172.16.0.2",
+  "interface_v6": "2001:db8::2",
+  "created": "2026-01-02T03:04:05Z",
+  "peer": {
+    "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "endpoint": {
+      "v4": "192.0.2.10:0",
+      "v6": "[2001:db8::10]:0",
+      "host": "engage.example.invalid:2408"
+    }
+  }
+}

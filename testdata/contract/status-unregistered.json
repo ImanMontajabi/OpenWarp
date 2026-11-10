@@ -1,0 +1,9 @@
+{
+  "status": "Disconnected",
+  "mode": "warp",
+  "mode_label": "Traffic and DNS (UDP)",
+  "protocol": "masque",
+  "registered": false,
+  "warp_plus": false,
+  "dns_protocol": "udp"
+}
