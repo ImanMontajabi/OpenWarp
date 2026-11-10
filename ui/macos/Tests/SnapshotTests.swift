@@ -33,6 +33,12 @@ final class SnapshotTests: XCTestCase {
 
     override func setUp() async throws {
         Motion.forceReduced = true
+        // Overlay scroll bars, as with a trackpad. With a mouse attached macOS uses legacy scroll bars that
+        // take 15 pt from every scrolling page, so goldens would depend on the input devices. Volatile: the
+        // argument domain lives only in this test process.
+        var args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        args["AppleShowScrollBars"] = "WhenScrolling"
+        UserDefaults.standard.setVolatileDomain(args, forName: UserDefaults.argumentDomain)
         if Self.recording {
             try FileManager.default.createDirectory(at: Self.goldens, withIntermediateDirectories: true)
             return

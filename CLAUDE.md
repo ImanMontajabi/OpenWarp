@@ -71,7 +71,7 @@ App tests (`scripts/test-app.sh [ui|record]`):
 - The Store takes a `Backend` (`CLIBackend` in the app). `act`/`set`/`toggle` return their `Task` so tests can
   await them. UI tests find controls by `accessibilityIdentifier`: `tab.<name>`, `cloud`, `mode.<id>`,
   `home.status`, `home.detail`, `page.title`, `page.scroll`, `segment.<value>`, `toggle.<key>`,
-  `choice.<title>`, `choice.option.<value>`, `toast.error|success`, `daemon.down`.
+  `choice.<title>`, `choice.option.<value>`, `toast.error|success` (message `toast.text`), `daemon.down`.
 
 UI files:
 - `OpenWarpApp.swift`: `@main` scene (hidden title bar, portrait window 380×760, max width 460) + `MenuBarExtra`.

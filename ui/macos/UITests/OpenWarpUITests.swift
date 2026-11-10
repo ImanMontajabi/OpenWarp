@@ -278,8 +278,8 @@ final class OpenWarpUITests: XCTestCase {
         field.typeText("NOT-A-KEY-AT-ALL\r")
         let toast = element("toast.error")
         XCTAssertTrue(toast.waitForExistence(timeout: timeout), "no error toast")
-        let invalid = NSPredicate(format: "label CONTAINS 'Invalid license key' OR value CONTAINS 'Invalid license key'")
-        XCTAssertTrue(text(toast).contains("Invalid license key") ||
-                      toast.descendants(matching: .any).matching(invalid).count > 0, "toast says \(text(toast))")
+        let message = toast.descendants(matching: .any)["toast.text"]
+        XCTAssertTrue(message.exists, "the toast exposes its message")
+        XCTAssertTrue(text(message).contains("Invalid license key"), "toast says \(text(message))")
     }
 }

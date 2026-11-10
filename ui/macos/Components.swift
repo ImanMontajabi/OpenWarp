@@ -507,6 +507,7 @@ struct ToastBanner: View {
                 .foregroundStyle(c.color)
             Text(toast.text).font(Typo.caption).foregroundStyle(Palette.text)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .accessibilityIdentifier("toast.text")
             Spacer(minLength: 0)
             Button(action: dismiss) {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 18, height: 18)
@@ -517,7 +518,9 @@ struct ToastBanner: View {
         .padding(Space.sm)
         .background(Palette.raised.mix(c, 0.10).color, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).strokeBorder(c.color.opacity(0.25)))
-        .accessibilityElement(children: .combine)
+        // A container, not a combined element: combining folds the message into the
+        // Dismiss button, and assistive technology then reads only "Dismiss".
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier(toast.kind == .error ? "toast.error" : "toast.success")
     }
 }
