@@ -3,9 +3,10 @@ name: Release candidate
 # Runs on every pull request into `release` (the only way to change that branch). It checks that the candidate
 # is ready to ship: it comes from `main`, the version is not released yet and has a CHANGELOG section, the
 # third-party notices are current, and the universal distribution build is complete. It builds an ad-hoc
-# signed test package but never publishes anything: releases are drafted by release.yml from a v* tag, behind
-# the "release" environment's manual approval. The regular CI, security, CodeQL and macOS app workflows also run
-# on these pull requests; the "Protect release" ruleset requires all of them.
+# signed test DMG (install-tested on the runner) but never publishes anything: releases are drafted by
+# release.yml, run by hand on the release branch, behind the "release" environment's manual approval. The
+# regular CI, security, CodeQL and macOS app workflows also run on these pull requests; the "Protect release
+# branch" ruleset requires all of them.
 on:
   pull_request:
     branches: [release]
@@ -57,6 +58,7 @@ jobs:
           fi
           grep -q "^## \[$version\] - [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}$" CHANGELOG.md \
             || { echo "::error::CHANGELOG.md has no '## [$version] - YYYY-MM-DD' section: move the [Unreleased] notes there"; exit 1; }
+          [ -s "docs/releases/v$version.md" ] || { echo "::error::docs/releases/v$version.md (release notes) is missing"; exit 1; }
           scripts/check-repo.sh
 
       - name: Third-party notices are current
@@ -82,16 +84,23 @@ jobs:
           codesign --verify --deep --strict build/OpenWarp.app
           # Ad-hoc signed only: say so instead of implying a Developer ID signature or notarization.
           codesign -dv build/OpenWarp.app 2>&1 | grep -E '^Signature=' | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Package for testing (not a release)
+      - name: Package the candidate DMG (not a release)
         run: |
-          name="OpenWarp-rc-${GITHUB_SHA::7}-macos-universal"
-          ditto -c -k --keepParent build/OpenWarp.app "$RUNNER_TEMP/$name.zip"
-          (cd "$RUNNER_TEMP" && shasum -a 256 "$name.zip" | tee "$name.zip.sha256")
+          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)
+          name="OpenWarp-v$version-rc-${GITHUB_SHA::7}-macos-universal"
+          scripts/make-dmg.sh build/OpenWarp.app "dist/$name.dmg"
+          ditto -c -k --keepParent build/OpenWarp.app "dist/$name.zip"
+          (cd dist && shasum -a 256 "$name.dmg" "$name.zip" | tee SHA256SUMS.txt)
+          scripts/verify-dmg.sh "dist/$name.dmg" "$version"
           echo "PACKAGE=$name" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install test (disposable runner)
+        run: scripts/ci-install-test.sh "dist/$PACKAGE.dmg" "$VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.PACKAGE }}
           path: |
-            ${{ runner.temp }}/${{ env.PACKAGE }}.zip
-            ${{ runner.temp }}/${{ env.PACKAGE }}.zip.sha256
+            dist/${{ env.PACKAGE }}.dmg
+            dist/${{ env.PACKAGE }}.zip
+            dist/SHA256SUMS.txt
           retention-days: 14

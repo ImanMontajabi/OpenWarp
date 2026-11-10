@@ -23,9 +23,11 @@ pushes, force pushes or deletion, and every required CI check must pass. The mai
 no approval is required, but every change still goes through a PR.
 
 Branch model: `main` = development (squash merges, merged branches auto-deleted); `release` = shippable, changed
-only by a PR from `main` (merge commit) that passes `release-candidate.yml`; `v*` tags on `release` run
-`release.yml`, which creates a **draft** release after approval in the `release` environment. Never merge
-`main` into `release`, tag, or publish a release without the maintainer's explicit go-ahead.
+only by a PR from `main` (merge commit) that passes `release-candidate.yml`. `release.yml` is run by hand
+(`workflow_dispatch` on `release`, input `version`): it verifies the source and required checks, builds and tests
+the DMG (`scripts/make-dmg.sh`, `verify-dmg.sh`, `ci-install-test.sh`), and creates a **draft** release after
+approval in the `release` environment; the `v<version>` tag is created only when the draft is published. Never
+merge `main` into `release`, tag, or publish a release without the maintainer's explicit go-ahead.
 
 1. Branch from `main`: `feat/…`, `fix/…`, `refactor/…`, `test/…`, `docs/…` or `ci/…`.
 2. Write tests first where practical: a new feature gets behaviour tests, a bug fix gets a regression test that

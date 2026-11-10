@@ -6,7 +6,9 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ## [Unreleased]
 
-First public version, not yet released.
+## [0.1.0] - 2026-11-10
+
+First public version (MVP). Release notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).
 
 ### Added
 
@@ -35,6 +37,9 @@ First public version, not yet released.
 - Open-source publication: MIT license, contributing guide, security policy, issue and PR templates.
 - Automated tests and CI: Go unit, integration and CLI tests; a JSON contract shared by the CLI and the app;
   SwiftUI unit, snapshot and XCUITest UI tests; govulncheck, gitleaks and CodeQL.
-- `main`/`release` branch model: release-candidate checks on pull requests into `release`, and a tag-triggered
-  workflow that drafts (never publishes) a GitHub release after manual approval.
+- `main`/`release` branch model: release-candidate checks on pull requests into `release`, and a manually run
+  release workflow that builds, tests and drafts (never publishes) a GitHub release after manual approval.
+- Distribution as a universal DMG (`OpenWarp-v<version>-macos-universal.dmg`, ad-hoc signed, not notarized) with
+  an Applications shortcut, plus a zip and `SHA256SUMS.txt`; CI verifies the DMG and tests installing the app and
+  the background service from it.
 - `THIRD_PARTY_NOTICES.md` with the licenses of the bundled Go modules, shipped inside OpenWarp.app.
