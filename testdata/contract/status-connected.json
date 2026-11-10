@@ -27,5 +27,11 @@
     "fallback_queries": 2,
     "failures": 1
   },
-  "network": "Wi-Fi"
+  "network": "Wi-Fi",
+  "version": "0.1.0",
+  "usage": {
+    "tx_bytes": 5123456,
+    "rx_bytes": 48654321,
+    "since": "2026-01-02T03:04:05Z"
+  }
 }

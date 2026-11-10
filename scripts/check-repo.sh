@@ -13,9 +13,9 @@ for f in README.md LICENSE CONTRIBUTING.md SECURITY.md CHANGELOG.md \
 done
 
 # One version everywhere: the CLI and the app bundle.
-cli=$(sed -n 's/^const version = "\(.*\)"$/\1/p' cmd/openwarp/main.go)
+cli=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)
 app=$(sed -n 's/.*<key>CFBundleShortVersionString<\/key><string>\(.*\)<\/string>.*/\1/p' build.sh)
-[ -n "$cli" ] || err "cannot read the CLI version from cmd/openwarp/main.go"
+[ -n "$cli" ] || err "cannot read the version from internal/buildinfo/buildinfo.go"
 [ "$cli" = "$app" ] || err "version mismatch: CLI $cli, app bundle (build.sh) $app"
 grep -q "^## \[Unreleased\]" CHANGELOG.md || err "CHANGELOG.md has no [Unreleased] section"
 

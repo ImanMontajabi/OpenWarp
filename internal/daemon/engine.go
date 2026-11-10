@@ -22,6 +22,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/ImanMontajabi/OpenWarp/internal/api"
+	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/dnsproxy"
 	"github.com/ImanMontajabi/OpenWarp/internal/keys"
 	"github.com/ImanMontajabi/OpenWarp/internal/proxy"
@@ -67,6 +68,19 @@ type Status struct {
 	Tunnel      *tunnel.Stats   `json:"tunnel,omitempty"`
 	DNS         *dnsproxy.Stats `json:"dns,omitempty"`
 	Network     string          `json:"network,omitempty"`
+	// Version of the daemon, so the app can tell when the installed service is outdated.
+	Version string `json:"version"`
+	// Usage is the traffic of the current connection, summed over reconnects (absent when disconnected).
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage counts inner IP bytes through the tunnel since the user last connected. Each reconnect builds a
+// new transport whose own counters (Status.Tunnel) start at zero; Usage keeps adding them up until the
+// user disconnects.
+type Usage struct {
+	TxBytes uint64    `json:"tx_bytes"`
+	RxBytes uint64    `json:"rx_bytes"`
+	Since   time.Time `json:"since"`
 }
 
 type Engine struct {
@@ -83,6 +97,20 @@ type Engine struct {
 	kick    chan struct{}
 	network string
 	netAt   time.Time
+
+	// Bytes of transports already torn down during the current connection (see Usage).
+	usedTx, usedRx uint64
+	usedSince      time.Time
+}
+
+// retireLocked folds a session's transport counters into the connection's usage
+// before it is dropped. Call with e.mu held, whenever e.sess is cleared.
+func (e *Engine) retireLocked(s *session) {
+	if s != nil && s.tr != nil {
+		st := s.tr.Stats()
+		e.usedTx += st.TxBytes
+		e.usedRx += st.RxBytes
+	}
 }
 
 func (e *Engine) refreshNetwork() {
@@ -307,6 +335,9 @@ func (e *Engine) Devices(ctx context.Context) ([]api.Device, error) {
 
 func (e *Engine) Connect() {
 	e.mu.Lock()
+	if !e.want { // a new connection: start counting from zero
+		e.usedTx, e.usedRx, e.usedSince = 0, 0, time.Now()
+	}
 	e.want = true
 	e.mu.Unlock()
 	e.setAlwaysOn(true)
@@ -317,6 +348,7 @@ func (e *Engine) Disconnect() {
 	e.mu.Lock()
 	e.want = false
 	sess := e.sess
+	e.retireLocked(sess)
 	e.sess = nil
 	e.status, e.reason, e.lastErr = StatusDisconnected, "Manual Disconnection", ""
 	e.mu.Unlock()
@@ -341,6 +373,7 @@ func (e *Engine) setAlwaysOn(v bool) {
 func (e *Engine) reconnect() {
 	e.mu.Lock()
 	sess := e.sess
+	e.retireLocked(sess)
 	e.sess = nil
 	e.mu.Unlock()
 	if sess != nil {
@@ -446,6 +479,7 @@ func (e *Engine) loop() {
 			e.mu.Lock()
 			current := e.sess == sess
 			if current {
+				e.retireLocked(sess)
 				e.sess = nil
 			}
 			e.mu.Unlock()
@@ -784,6 +818,16 @@ func (e *Engine) Status() Status {
 	st := Status{
 		Status: e.status, Reason: e.reason, Error: e.lastErr, Mode: set.Mode, ModeLabel: set.Mode.Label(),
 		Protocol: set.Protocol, Registered: reg != nil, Since: e.since, DNSProtocol: "off",
+		Version: buildinfo.Version,
+	}
+	if e.want {
+		u := Usage{TxBytes: e.usedTx, RxBytes: e.usedRx, Since: e.usedSince}
+		if s := e.sess; s != nil && s.tr != nil {
+			cur := s.tr.Stats()
+			u.TxBytes += cur.TxBytes
+			u.RxBytes += cur.RxBytes
+		}
+		st.Usage = &u
 	}
 	if reg != nil {
 		st.AccountType = reg.Account.AccountType
@@ -869,6 +913,7 @@ func (e *Engine) UpdateSettings(fn func(*state.Settings) error) (state.Settings,
 func (e *Engine) Shutdown() {
 	e.mu.Lock()
 	sess := e.sess
+	e.retireLocked(sess)
 	e.sess = nil
 	e.mu.Unlock()
 	if sess != nil {

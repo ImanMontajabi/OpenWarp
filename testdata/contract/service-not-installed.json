@@ -1,0 +1,9 @@
+{
+  "installed": false,
+  "loaded": false,
+  "running": false,
+  "app_version": "0.1.0",
+  "up_to_date": false,
+  "socket": "/var/run/openwarp.sock",
+  "error": "cannot reach the openwarp daemon at /var/run/openwarp.sock: connection refused"
+}

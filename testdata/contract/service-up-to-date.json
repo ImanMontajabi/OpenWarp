@@ -1,0 +1,10 @@
+{
+  "installed": true,
+  "loaded": true,
+  "program": "/Library/PrivilegedHelperTools/com.local.openwarp",
+  "running": true,
+  "version": "0.1.0",
+  "app_version": "0.1.0",
+  "up_to_date": true,
+  "socket": "/var/run/openwarp.sock"
+}

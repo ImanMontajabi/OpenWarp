@@ -1,0 +1,9 @@
+{
+  "installed": true,
+  "loaded": true,
+  "program": "/usr/local/bin/openwarp",
+  "running": true,
+  "app_version": "0.1.0",
+  "up_to_date": false,
+  "socket": "/var/run/openwarp.sock"
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ImanMontajabi/OpenWarp/internal/api"
+	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
 	"github.com/ImanMontajabi/OpenWarp/internal/dnsproxy"
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
@@ -36,6 +37,9 @@ func fixtureStatusConnected() daemon.Status {
 		},
 		DNS:     &dnsproxy.Stats{Queries: 10, Fallback: 2, Failures: 1},
 		Network: "Wi-Fi",
+		Version: buildinfo.Version,
+		// More than the current transport: an earlier transport of this connection carried traffic too.
+		Usage: &daemon.Usage{TxBytes: 5_123_456, RxBytes: 48_654_321, Since: fixtureTime},
 	}
 }
 
@@ -52,6 +56,8 @@ func fixtureStatusRetrying() daemon.Status {
 		WarpPlus:    true,
 		DNSProtocol: "none",
 		Network:     "Ethernet",
+		Version:     buildinfo.Version,
+		Usage:       &daemon.Usage{TxBytes: 2048, RxBytes: 4096, Since: fixtureTime},
 	}
 }
 
@@ -62,6 +68,7 @@ func fixtureStatusUnregistered() daemon.Status {
 		ModeLabel:   state.ModeWarp.Label(),
 		Protocol:    state.ProtoMasque,
 		DNSProtocol: "udp",
+		Version:     buildinfo.Version,
 	}
 }
 

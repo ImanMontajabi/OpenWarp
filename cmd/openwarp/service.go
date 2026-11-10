@@ -3,17 +3,27 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
+	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
 )
 
 const (
-	plistPath = "/Library/LaunchDaemons/com.local.openwarp.plist"
-	binPath   = "/usr/local/bin/openwarp"
 	label     = "com.local.openwarp"
+	plistPath = "/Library/LaunchDaemons/com.local.openwarp.plist"
+	// helperPath is the binary launchd runs as root. It lives in a root-owned directory: a root job must
+	// never run a file that a non-root user can replace (/usr/local/bin is often user-owned, for example
+	// with Homebrew on Intel Macs).
+	helperPath = "/Library/PrivilegedHelperTools/com.local.openwarp"
+	// linkPath is a convenience symlink so `openwarp` works in a shell. Only users run it, never launchd.
+	linkPath = "/usr/local/bin/openwarp"
 
 	// Pre-rename (cwarp) service, removed on install/uninstall.
 	legacyPlistPath = "/Library/LaunchDaemons/com.local.cwarp.plist"
@@ -34,7 +44,7 @@ func removeLegacy() {
 	fmt.Println("Removed the old", legacyLabel, "service")
 }
 
-// loaded reports whether launchd currently knows the service.
+// loaded reports whether launchd currently knows the service. Works without root.
 func loaded(l string) bool { return exec.Command("launchctl", "print", "system/"+l).Run() == nil }
 
 // stopService boots the service out and waits until launchd has finished
@@ -67,13 +77,15 @@ func startService() error {
 	return last
 }
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
+// launchdPlist is the LaunchDaemon definition for a daemon binary at program.
+func launchdPlist(program string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>` + label + `</string>
   <key>ProgramArguments</key>
-  <array><string>` + binPath + `</string><string>daemon</string></array>
+  <array><string>` + program + `</string><string>daemon</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>/var/log/openwarp.log</string>
@@ -81,10 +93,88 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>
 `
+}
+
+// rootOnly checks that path and every directory above it are owned by root and
+// not writable by group or others (the sticky /Library/PrivilegedHelperTools
+// style 1755 is fine), so no other user can swap the file launchd runs as root.
+func rootOnly(path string, lstat func(string) (fs.FileInfo, error)) error {
+	for p := path; ; p = filepath.Dir(p) {
+		fi, err := lstat(p)
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("%s: cannot read the owner", p)
+		}
+		if st.Uid != 0 {
+			return fmt.Errorf("%s is owned by uid %d, not root", p, st.Uid)
+		}
+		if fi.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("%s is writable by non-root users (mode %v)", p, fi.Mode().Perm())
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", p)
+		}
+		if p == "/" {
+			return nil
+		}
+	}
+}
+
+// writeAtomic writes data to a new file next to path and renames it into place,
+// so the result is a fresh root-owned file with exactly mode perm.
+func writeAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".new"
+	os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil { // not subject to the umask
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// installLink points the convenience command at the helper. A regular file
+// there (an older install) is replaced; anything else that is not ours is kept.
+func installLink() {
+	if fi, err := os.Lstat(linkPath); err == nil {
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			if dst, _ := os.Readlink(linkPath); dst == helperPath {
+				return
+			}
+		} else if !fi.Mode().IsRegular() {
+			return
+		}
+		os.Remove(linkPath)
+	}
+	if _, err := os.Stat(filepath.Dir(linkPath)); err != nil {
+		return
+	}
+	if err := os.Symlink(helperPath, linkPath); err != nil {
+		fmt.Println("Note: could not link", linkPath, "->", helperPath+":", err)
+	}
+}
 
 // service installs the daemon as a LaunchDaemon, like the official client's
-// privileged CloudflareWARP service.
+// privileged CloudflareWARP service. `service status` needs no root.
 func service(action string) error {
+	if action == "status" {
+		return printServiceStatus()
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("run with sudo")
 	}
@@ -96,23 +186,29 @@ func service(action string) error {
 			return err
 		}
 		self, _ = filepath.EvalSymlinks(self)
-		if self != binPath {
+		if self != helperPath {
 			data, err := os.ReadFile(self)
 			if err != nil {
 				return err
 			}
-			os.MkdirAll(filepath.Dir(binPath), 0o755)
-			if err := os.WriteFile(binPath+".new", data, 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(helperPath), 0o755); err != nil {
 				return err
 			}
-			if err := os.Rename(binPath+".new", binPath); err != nil {
+			if err := rootOnly(filepath.Dir(helperPath), os.Lstat); err != nil {
+				return fmt.Errorf("refusing to install the root service: %v", err)
+			}
+			if err := writeAtomic(helperPath, data, 0o755); err != nil {
 				return err
 			}
+		}
+		if err := rootOnly(helperPath, os.Lstat); err != nil {
+			return fmt.Errorf("refusing to install the root service: %v", err)
 		}
 		stopService(label)
-		if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
+		if err := writeAtomic(plistPath, []byte(launchdPlist(helperPath)), 0o644); err != nil {
 			return err
 		}
+		installLink()
 		if err := startService(); err != nil {
 			return err
 		}
@@ -122,8 +218,95 @@ func service(action string) error {
 		removeLegacy()
 		stopService(label)
 		os.Remove(plistPath)
-		fmt.Println("Removed", label, "(binary left at", binPath+")")
+		if dst, _ := os.Readlink(linkPath); dst == helperPath {
+			os.Remove(linkPath)
+		}
+		os.Remove(helperPath)
+		fmt.Println("Removed", label, "(settings and registration are kept in /Library/Application Support/openwarp)")
 		return nil
 	}
-	return fmt.Errorf("unknown service action %q", action)
+	return fmt.Errorf("unknown service action %q (install, uninstall or status)", action)
+}
+
+// ServiceStatus is `openwarp -j service status`: what the app checks before
+// offering to install the background service and after installing it.
+type ServiceStatus struct {
+	Installed  bool   `json:"installed"`         // the LaunchDaemon plist exists
+	Loaded     bool   `json:"loaded"`            // launchd knows the job
+	Program    string `json:"program,omitempty"` // the binary the plist runs
+	Running    bool   `json:"running"`           // the daemon answered on its control socket
+	Version    string `json:"version,omitempty"` // the running daemon's version
+	AppVersion string `json:"app_version"`       // this binary's version
+	// UpToDate: the service runs this version from the root-owned helper path.
+	UpToDate bool   `json:"up_to_date"`
+	Socket   string `json:"socket"`
+	Error    string `json:"error,omitempty"`
+}
+
+// serviceProbe is what serviceStatus reads from the system (fakes in tests).
+type serviceProbe struct {
+	readPlist func() ([]byte, error)
+	loaded    func() bool
+	status    func() (daemon.Status, error)
+	socket    string
+}
+
+func serviceStatus(p serviceProbe) ServiceStatus {
+	s := ServiceStatus{AppVersion: buildinfo.Version, Socket: p.socket}
+	if data, err := p.readPlist(); err == nil {
+		s.Installed = true
+		s.Program = plistProgram(string(data))
+	}
+	s.Loaded = s.Installed && p.loaded()
+	if st, err := p.status(); err == nil {
+		s.Running, s.Version = true, st.Version
+	} else {
+		s.Error = err.Error()
+	}
+	s.UpToDate = s.Installed && s.Loaded && s.Running && s.Version == buildinfo.Version && s.Program == helperPath
+	return s
+}
+
+// plistProgram extracts the first ProgramArguments string from our plist.
+func plistProgram(plist string) string {
+	_, rest, ok := strings.Cut(plist, "<key>ProgramArguments</key>")
+	if !ok {
+		return ""
+	}
+	_, rest, ok = strings.Cut(rest, "<string>")
+	if !ok {
+		return ""
+	}
+	prog, _, _ := strings.Cut(rest, "</string>")
+	return strings.TrimSpace(prog)
+}
+
+func printServiceStatus() error {
+	s := serviceStatus(serviceProbe{
+		readPlist: func() ([]byte, error) { return os.ReadFile(plistPath) },
+		loaded:    func() bool { return loaded(label) },
+		status: func() (daemon.Status, error) {
+			var st daemon.Status
+			err := call("GET", "/v1/status", nil, &st)
+			return st, err
+		},
+		socket: daemon.SocketPath(),
+	})
+	if jsonOut {
+		printJSON(s)
+		return nil
+	}
+	fmt.Printf("Service:  %s\n", map[bool]string{true: "installed", false: "not installed"}[s.Installed])
+	if s.Installed {
+		fmt.Printf("launchd:  %s (runs %s)\n", map[bool]string{true: "loaded", false: "not loaded"}[s.Loaded], s.Program)
+	}
+	if s.Running {
+		fmt.Printf("Daemon:   running %s on %s\n", s.Version, s.Socket)
+	} else {
+		fmt.Printf("Daemon:   not reachable on %s\n", s.Socket)
+	}
+	if s.Installed && !s.UpToDate {
+		fmt.Println("Run `sudo openwarp service install` to update the service.")
+	}
+	return nil
 }
