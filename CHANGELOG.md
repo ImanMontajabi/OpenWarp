@@ -31,3 +31,6 @@ First public version, not yet released.
 - Open-source publication: MIT license, contributing guide, security policy, issue and PR templates.
 - Automated tests and CI: Go unit, integration and CLI tests; a JSON contract shared by the CLI and the app;
   SwiftUI unit, snapshot and XCUITest UI tests; govulncheck, gitleaks and CodeQL.
+- `main`/`release` branch model: release-candidate checks on pull requests into `release`, and a tag-triggered
+  workflow that drafts (never publishes) a GitHub release after manual approval.
+- `THIRD_PARTY_NOTICES.md` with the licenses of the bundled Go modules, shipped inside OpenWarp.app.

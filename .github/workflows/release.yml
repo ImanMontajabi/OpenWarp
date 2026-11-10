@@ -1,0 +1,94 @@
+name: Release
+
+# Drafts a GitHub release from a version tag (v1.2.3) on the `release` branch. Nothing is published
+# automatically: the draft job waits for approval in the "release" environment, and the maintainer reviews
+# and publishes the draft by hand. The build is ad-hoc signed and not notarized; the draft notes say so.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: v
+        name: Tag matches the version and is on release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)
+          [ "$TAG" = "v$version" ] || { echo "::error::tag $TAG does not match version $version"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/release \
+            || { echo "::error::$TAG is not on the release branch"; exit 1; }
+          grep -q "^## \[$version\] - " CHANGELOG.md || { echo "::error::CHANGELOG.md has no [$version] section"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  draft:
+    name: Draft the GitHub release
+    needs: verify
+    runs-on: macos-26
+    timeout-minutes: 30
+    environment: release   # requires the maintainer's approval
+    permissions:
+      contents: write      # create the draft release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: build.sh
+        run: ./build.sh
+      - name: Verify the bundle
+        run: |
+          scripts/verify-app-bundle.sh build/OpenWarp.app arm64 x86_64
+          scripts/third-party-notices.sh --check
+          codesign --verify --deep --strict build/OpenWarp.app
+      - name: Package
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          name="OpenWarp-$VERSION-macos-universal"
+          mkdir -p dist
+          ditto -c -k --keepParent build/OpenWarp.app "dist/$name.zip"
+          (cd dist && shasum -a 256 "$name.zip" > "$name.zip.sha256" && cat "$name.zip.sha256")
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          {
+            awk -v v="## [$VERSION]" 'index($0, v) == 1 {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md
+            echo
+            echo "---"
+            echo "This build is ad-hoc signed and **not notarized**: macOS Gatekeeper warns on first launch."
+            echo "Verify the download against the .sha256 file."
+          } > dist/notes.md
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --draft --verify-tag --title "OpenWarp $VERSION" --notes-file dist/notes.md \
+            "dist/OpenWarp-$VERSION-macos-universal.zip" "dist/OpenWarp-$VERSION-macos-universal.zip.sha256"
+          echo "Draft release created for $TAG. Review and publish it by hand." >> "$GITHUB_STEP_SUMMARY"

@@ -5,8 +5,8 @@ fastest way to get a change in.
 
 ## Ground rules
 
-- **Every change reaches `main` through a pull request.** Direct pushes, force pushes and deleting `main` are
-  blocked by a repository ruleset, and every required CI check must pass before a PR can be merged.
+- **Every change reaches `main` through a pull request.** Direct pushes, force pushes and deleting `main` (and
+  `release`) are blocked by repository rulesets, and every required CI check must pass before a PR can be merged.
 - **Every meaningful change comes with tests.** A new feature gets tests that pin down its behaviour; a bug fix
   gets a regression test that fails without the fix. Write the test first when you can. Tests must check
   observable behaviour (results, errors, edge cases), not just raise coverage.
@@ -17,6 +17,22 @@ fastest way to get a change in.
   `internal/daemon/e2e_test.go` and `internal/tunnel/*_test.go`, and synthetic keys and IDs only.
 - **Never commit secrets.** No `state.json`, tokens, private keys, license keys or real device IDs, in code,
   fixtures, logs or screenshots.
+
+## Branches and releases
+
+- **`main`** is the development branch. Feature branches start from `main` and come back through squash-merged
+  pull requests; merged branches are deleted automatically.
+- **`release`** holds what is ready to ship. It changes only through a pull request **from `main`** (merged with a
+  merge commit, so the history of `main` stays intact), after the "Release candidate" workflow has checked the
+  version, the changelog section, the third-party notices and the universal build. Pushes, force pushes and
+  deletion are blocked for everyone.
+- **Releases** start from a `v<version>` tag on `release`. The "Release" workflow builds the app and creates a
+  **draft** GitHub release only after the maintainer approves the `release` environment; publishing the draft
+  is a separate manual step. Version tags cannot be moved or deleted.
+
+To prepare a release (maintainer): bump the version in `internal/buildinfo/buildinfo.go`, `build.sh` and
+`FakeDaemon.version`; move the `[Unreleased]` notes to `## [x.y.z] - YYYY-MM-DD`; merge that to `main`; then
+open a pull request from `main` into `release`.
 
 ## Workflow
 

@@ -1,16 +1,16 @@
 name: macOS app
 
 # The SwiftUI app: compile checks, unit/contract/snapshot tests and XCUITest UI tests; every job is a required
-# check in the "Protect main" ruleset. Snapshot goldens are kept per exact macOS version; the ones for this
-# runner image live in ui/macos/Tests/__Snapshots__/macOS-<version>. When the image moves to a new macOS version
-# the snapshot tests are skipped and this workflow warns: run it by hand with record_snapshots, review the PNGs
+# check in the "Protect main" and "Protect release" rulesets. Snapshot goldens are kept per exact macOS version;
+# the ones for this runner image live in ui/macos/Tests/__Snapshots__/macOS-<version>. When the image moves to a
+# new macOS version the snapshot tests are skipped and this workflow warns: run it by hand with record_snapshots, review the PNGs
 # in the uploaded artifact and commit them. UI tests drive the UITest build against its in-process fake daemon:
 # no OpenWarp daemon, network changes, root or Cloudflare account.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, release]
   push:
-    branches: [main]
+    branches: [main, release]
   workflow_dispatch:
     inputs:
       record_snapshots:

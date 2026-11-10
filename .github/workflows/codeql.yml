@@ -3,9 +3,9 @@ name: CodeQL
 # Static security analysis. Results appear under Security › Code scanning and as PR annotations.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, release]
   push:
-    branches: [main]
+    branches: [main, release]
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:

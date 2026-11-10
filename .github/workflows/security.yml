@@ -1,13 +1,13 @@
 name: Security
 
 # Known-vulnerable Go dependencies (govulncheck) and committed secrets (gitleaks, whole history). Runs on every
-# pull request into main and push to main (both jobs are required checks), and every Monday so that newly
+# pull request into main or release and push to them (both jobs are required checks), and every Monday so that newly
 # published advisories are caught even when nothing changes. A failing scheduled run notifies the maintainer.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, release]
   push:
-    branches: [main]
+    branches: [main, release]
   schedule:
     - cron: "0 7 * * 1"
   workflow_dispatch:
