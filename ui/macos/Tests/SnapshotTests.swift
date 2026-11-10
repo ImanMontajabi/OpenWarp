@@ -76,6 +76,10 @@ final class SnapshotTests: XCTestCase {
         try assertSnapshot("profile", tab: .profile, status: "status-connected.json")
     }
 
+    func testAbout() throws {
+        try assertSnapshot("about", tab: .about, status: "status-unregistered.json")
+    }
+
     /// First run: the service is not installed, so the main window shows setup.
     func testDaemonDown() throws {
         let store = Store(backend: MockBackend(), polling: false)
@@ -136,6 +140,9 @@ final class SnapshotTests: XCTestCase {
 
     private func window<V: View>(_ view: V, store: Store, setup: SetupModel) -> some View {
         view.environmentObject(store).environmentObject(setup).environmentObject(location())
+            .environmentObject(UpdateChecker(fetcher: UpdatesTests.ScriptedReleases(.success(nil)),
+                                             defaults: UserDefaults(suiteName: "openwarp.snapshots.\(UUID())")!,
+                                             currentVersion: "0.1.0"))
     }
 
     private func setup(_ phase: SetupPhase) -> SetupModel {

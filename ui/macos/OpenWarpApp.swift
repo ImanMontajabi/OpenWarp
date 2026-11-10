@@ -11,12 +11,14 @@ struct OpenWarpApp: App {
     @StateObject private var store: Store
     @StateObject private var setup: SetupModel
     @StateObject private var location: LocationModel
+    @StateObject private var updates: UpdateChecker
 
     init() {
         let m = AppModels.forLaunch()
         _store = StateObject(wrappedValue: m.store)
         _setup = StateObject(wrappedValue: m.setup)
         _location = StateObject(wrappedValue: m.location)
+        _updates = StateObject(wrappedValue: m.updates)
     }
 
     var body: some Scene {
@@ -25,6 +27,7 @@ struct OpenWarpApp: App {
                 .environmentObject(store)
                 .environmentObject(setup)
                 .environmentObject(location)
+                .environmentObject(updates)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)

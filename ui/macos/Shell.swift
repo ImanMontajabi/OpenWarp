@@ -21,34 +21,40 @@ enum Tab: String, CaseIterable, Identifiable {
 struct RootView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var setup: SetupModel
+    @EnvironmentObject var updates: UpdateChecker
     @State private var tab: Tab
-    @Environment(\.owReduceMotion) private var reduce
+    /// Pages are built on their first visit and then kept alive, so switching tabs only cross-fades:
+    /// no rebuild, no reload, and scroll positions and expanded rows stay where they were.
+    @State private var visited: Set<Tab>
 
-    init(initialTab: Tab = .home) { _tab = State(initialValue: initialTab) }
+    init(initialTab: Tab = .home) {
+        _tab = State(initialValue: initialTab)
+        _visited = State(initialValue: [initialTab])
+    }
 
     private var tint: Tint { Tint(accent: ModeInfo.find(store.mode).accent, engaged: store.connected) }
+    /// Without the service only About is usable; the other tabs show the setup screen.
+    private var showOnboarding: Bool { store.daemonError != nil && tab != .about }
 
     var body: some View {
         VStack(spacing: 0) {
             TitleArea()
             ServiceUpdateBanner()
+            AppUpdateBanner()
             ZStack {
-                Group {
-                    if store.daemonError != nil, tab != .about {
-                        OnboardingView()
-                    } else {
-                        switch tab {
-                        case .home: HomeView()
-                        case .connectivity: ConnectivityView()
-                        case .settings: SettingsView()
-                        case .profile: ProfileView()
-                        case .about: AboutView()
-                        }
-                    }
+                ForEach(Tab.allCases.filter { $0 == tab || visited.contains($0) }) { t in
+                    let shown = t == tab && !showOnboarding
+                    page(t)
+                        .opacity(shown ? 1 : 0)
+                        .allowsHitTesting(shown)
+                        .accessibilityHidden(!shown)
+                        .environment(\.owPageActive, shown)
                 }
-                .id(tab)
-                .transition(reduce ? .opacity : .opacity.combined(with: .offset(y: 6)))
+                if showOnboarding {
+                    OnboardingView().transition(.opacity)
+                }
             }
+            .onChange(of: tab) { visited.insert(tab) }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()   // keep scrolled content out of the title strip
             .overlay(alignment: .bottom) {
@@ -76,7 +82,23 @@ struct RootView: View {
         // Re-check the service when the daemon goes away or comes back (and once at launch).
         .onChange(of: store.daemonError == nil) { if !setup.phase.busy { setup.check() } }
         .task { if setup.phase == .checking { setup.check() } }
+        .task { await updates.runAutomaticChecks() }
     }
+
+    @ViewBuilder private func page(_ t: Tab) -> some View {
+        switch t {
+        case .home: HomeView()
+        case .connectivity: ConnectivityView()
+        case .settings: SettingsView()
+        case .profile: ProfileView()
+        case .about: AboutView()
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// False for pages kept alive behind the visible one; they pause their animations.
+    @Entry var owPageActive: Bool = true
 }
 
 // MARK: - Title area
@@ -141,7 +163,7 @@ struct BottomNav: View {
             ForEach(Tab.allCases) { t in
                 let on = t == selection
                 Button {
-                    withAnimation(reduce ? nil : Motion.standard) { selection = t }
+                    withAnimation(reduce ? nil : Motion.quick) { selection = t }
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: on ? t.icon + ".fill" : t.icon)

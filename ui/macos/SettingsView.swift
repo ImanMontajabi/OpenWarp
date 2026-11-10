@@ -11,6 +11,7 @@ private enum Sheet: String, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var location: LocationModel
+    @EnvironmentObject var updates: UpdateChecker
     @State private var sheet: Sheet?
     @State private var port = ""
     @State private var endpoint = ""
@@ -79,6 +80,30 @@ struct SettingsView: View {
                 }
             }
 
+            CardSection(title: "Updates") {
+                Row(icon: "arrow.triangle.2.circlepath", title: "Check for updates automatically",
+                    subtitle: "Asks GitHub once a day for a newer release. Updates are not downloaded or installed automatically.") {
+                    Toggle("", isOn: $updates.automatic)
+                        .toggleStyle(PillToggleStyle())
+                        .labelsHidden()
+                        .accessibilityLabel("Check for updates automatically")
+                        .accessibilityIdentifier("toggle.check_updates")
+                }
+                Row(icon: "shippingbox", title: "OpenWarp \(updates.currentVersion)", subtitle: updateStatus) {
+                    if case .available = updates.state {
+                        Button("Download") { updates.openReleasePage() }
+                            .buttonStyle(.flat(.primary))
+                            .accessibilityIdentifier("updates.download")
+                    } else {
+                        Button("Check Now") { updates.check() }
+                            .buttonStyle(.flat())
+                            .disabled(updates.state == .checking)
+                            .accessibilityIdentifier("updates.check")
+                    }
+                }
+                .accessibilityIdentifier("updates.status")
+            }
+
             DisclosureSection(title: "Advanced") {
                 Row(icon: "point.3.connected.trianglepath.dotted", title: "Proxy port",
                     subtitle: "Used in Local proxy mode (127.0.0.1:port).") {
@@ -114,6 +139,16 @@ struct SettingsView: View {
     // MARK: helpers
 
     private func value(_ key: String, _ current: String) -> String { store.pendingValue(key) ?? current }
+
+    private var updateStatus: String {
+        switch updates.state {
+        case .idle: updates.automatic ? "Not checked yet." : "Automatic checks are off."
+        case .checking: "Checking GitHub…"
+        case .upToDate: "You have the latest version."
+        case .available(let v, _): "OpenWarp \(v) is available. Download it from the release page."
+        case .failed(let m): "Could not check for updates: \(m)"
+        }
+    }
 
     private func countSuffix(_ list: [String]?) -> String {
         guard let n = list?.count, n > 0 else { return "" }
