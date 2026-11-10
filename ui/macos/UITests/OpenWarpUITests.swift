@@ -28,11 +28,32 @@ final class OpenWarpUITests: XCTestCase {
     private var statusTitle: XCUIElement { app.staticTexts["home.status"] }
     private var cloud: XCUIElement { app.buttons["cloud"] }
 
+    /// The text of a static text. On macOS SwiftUI puts it in the accessibility
+    /// value; the label is only set when the view overrides it.
+    private func text(_ e: XCUIElement) -> String {
+        if let v = e.value as? String, !v.isEmpty { return v }
+        return e.label
+    }
+
+    /// A SwiftUI Toggle is a checkbox whose value is 1 (on) or 0 (off).
+    private func isOn(_ e: XCUIElement) -> Bool? {
+        switch e.value {
+        case let n as NSNumber: return n.boolValue
+        case let s as String: return s == "1" || s == "On"
+        default: return nil
+        }
+    }
+
+    private func wait(_ format: String, _ args: [Any] = [], on e: XCUIElement) -> Bool {
+        let done = expectation(for: NSPredicate(format: format, argumentArray: args), evaluatedWith: e)
+        return XCTWaiter().wait(for: [done], timeout: timeout) == .completed
+    }
+
     private func waitForStatus(_ text: String, file: StaticString = #filePath, line: UInt = #line) {
         let match = NSPredicate(format: "label == %@ OR value == %@", text, text)
         let found = expectation(for: match, evaluatedWith: statusTitle)
         XCTAssertEqual(XCTWaiter().wait(for: [found], timeout: timeout), .completed,
-                       "status never became \(text) (is \(statusTitle.label))", file: file, line: line)
+                       "status never became \(text) (is \(self.text(statusTitle)))", file: file, line: line)
     }
 
     private func open(_ tab: String) {
@@ -42,9 +63,10 @@ final class OpenWarpUITests: XCTestCase {
     }
 
     private func assertPageTitle(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
-        let header = app.staticTexts["page.title"]
-        XCTAssertTrue(header.waitForExistence(timeout: timeout), "no page title", file: file, line: line)
-        XCTAssertEqual(header.label, title, file: file, line: line)
+        // About has no page title, only the app name as its heading.
+        let header = title == "About" ? element("about.title") : element("page.title")
+        XCTAssertTrue(header.waitForExistence(timeout: timeout), "no title on \(title)", file: file, line: line)
+        XCTAssertEqual(text(header), title == "About" ? "OpenWarp" : title, file: file, line: line)
     }
 
     // MARK: launch and Home
@@ -67,7 +89,7 @@ final class OpenWarpUITests: XCTestCase {
         cloud.click()
         waitForStatus("Connected")
         XCTAssertEqual(cloud.label, "Disconnect")
-        XCTAssertEqual(app.staticTexts["home.detail"].label, "Your Internet is private.")
+        XCTAssertEqual(text(app.staticTexts["home.detail"]), "Your Internet is private.")
         cloud.click()
         waitForStatus("Disconnected")
         XCTAssertEqual(cloud.label, "Connect")
@@ -93,7 +115,7 @@ final class OpenWarpUITests: XCTestCase {
         app.buttons["mode.proxy"].click()
         cloud.click()
         waitForStatus("Connected")
-        XCTAssertEqual(app.staticTexts["home.detail"].label, "Proxy listening on 127.0.0.1:40000")
+        XCTAssertEqual(text(app.staticTexts["home.detail"]), "Proxy listening on 127.0.0.1:40000")
     }
 
     func testConnectionFailureShowsReconnectingWithTheError() {
@@ -101,7 +123,7 @@ final class OpenWarpUITests: XCTestCase {
         waitForStatus("Disconnected")
         cloud.click()
         waitForStatus("Reconnecting")
-        XCTAssertEqual(app.staticTexts["home.detail"].label, "dial 192.0.2.10:443: i/o timeout")
+        XCTAssertEqual(text(app.staticTexts["home.detail"]), "dial 192.0.2.10:443: i/o timeout")
         XCTAssertEqual(cloud.label, "Disconnect", "the user can stop retrying")
     }
 
@@ -157,7 +179,7 @@ final class OpenWarpUITests: XCTestCase {
         let scroll = app.scrollViews["page.scroll"].firstMatch
         XCTAssertTrue(scroll.waitForExistence(timeout: timeout))
         scroll.scroll(byDeltaX: 0, deltaY: -2000)
-        let advanced = app.buttons.containing(NSPredicate(format: "label CONTAINS 'Advanced'")).firstMatch
+        let advanced = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Advanced'")).firstMatch
         XCTAssertTrue(advanced.waitForExistence(timeout: timeout), "the end of Settings is reachable by scrolling")
         for tab in ["home", "connectivity", "settings", "profile", "about"] {
             XCTAssertTrue(app.buttons["tab.\(tab)"].isHittable, "tab \(tab) is covered after scrolling")
@@ -183,21 +205,19 @@ final class OpenWarpUITests: XCTestCase {
     func testTogglesFlipAndStayFlipped() {
         launch()
         open("Settings")
-        let pq = element("toggle.post_quantum")
+        let pq = app.checkBoxes["toggle.post_quantum"]
         XCTAssertTrue(pq.waitForExistence(timeout: timeout))
-        XCTAssertEqual(pq.value as? String, "On")
+        XCTAssertEqual(isOn(pq), true)
         pq.click()
-        let off = expectation(for: NSPredicate(format: "value == 'Off'"), evaluatedWith: pq)
-        XCTAssertEqual(XCTWaiter().wait(for: [off], timeout: timeout), .completed)
+        XCTAssertTrue(wait("value == 0", on: pq), "post-quantum did not switch off")
         // Survives the next settings refresh from the daemon (about every 6 seconds).
         sleep(7)
-        XCTAssertEqual(pq.value as? String, "Off")
+        XCTAssertEqual(isOn(pq), false)
 
-        let wifi = element("toggle.disable_wifi")
-        XCTAssertEqual(wifi.value as? String, "Off")
+        let wifi = app.checkBoxes["toggle.disable_wifi"]
+        XCTAssertEqual(isOn(wifi), false)
         wifi.click()
-        let on = expectation(for: NSPredicate(format: "value == 'On'"), evaluatedWith: wifi)
-        XCTAssertEqual(XCTWaiter().wait(for: [on], timeout: timeout), .completed)
+        XCTAssertTrue(wait("value == 1", on: wifi), "Wi-Fi toggle did not switch on")
     }
 
     func testFamiliesChoiceUpdatesTheRow() {
@@ -209,8 +229,24 @@ final class OpenWarpUITests: XCTestCase {
         let malware = app.buttons["choice.option.malware"]
         XCTAssertTrue(malware.waitForExistence(timeout: timeout))
         malware.click()
-        let shown = app.staticTexts["Block malware"]
-        XCTAssertTrue(shown.waitForExistence(timeout: timeout), "the row shows the new choice")
+        // The row is one button whose label combines its title and current value.
+        XCTAssertTrue(wait("label == %@", ["1.1.1.1 for Families, Block malware"], on: row),
+                      "the row shows the new choice (is \(row.label))")
+    }
+
+    // MARK: profile
+
+    /// Regression: reading the Profile page's accessibility tree (as VoiceOver
+    /// and XCUITest do) used to crash the app with endless label recursion.
+    func testProfilePageIsReadable() {
+        launch()
+        open("Profile")
+        assertPageTitle("Profile")
+        XCTAssertTrue(app.buttons["Change"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == 'Hidden'")).firstMatch.exists,
+                      "the license key is hidden from assistive technology until revealed")
+        XCTAssertGreaterThan(app.descendants(matching: .any).count, 10)
+        XCTAssertEqual(app.state, .runningForeground, "the app is still running")
     }
 
     // MARK: errors

@@ -16,6 +16,8 @@ struct AboutView: View {
                     .padding(.bottom, Space.xs)
                     .accessibilityHidden(true)
                 Text("OpenWarp").font(.system(size: 22, weight: .semibold))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("about.title")
                 Text("An open client for the Cloudflare WARP network.")
                     .font(Typo.body).foregroundStyle(Palette.textSecondary).multilineTextAlignment(.center)
             }

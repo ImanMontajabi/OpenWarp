@@ -36,7 +36,9 @@ struct ProfileView: View {
                             Text(revealLicense ? r.license : masked(r.license))
                                 .font(Typo.mono).foregroundStyle(Palette.textSecondary)
                                 .lineLimit(1).truncationMode(.middle)
-                                .textSelection(.enabled)
+                                // Not .textSelection: a selectable Text with its own accessibility label
+                                // made SwiftUI resolve the label recursively and crash (stack overflow)
+                                // when VoiceOver or a UI test read this page. The copy button copies it.
                                 .accessibilityLabel(revealLicense ? r.license : "Hidden")
                         }
                         Spacer(minLength: Space.xs)
