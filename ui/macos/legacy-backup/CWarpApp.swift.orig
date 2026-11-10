@@ -1,0 +1,578 @@
+// CWarp — SwiftUI front end for the cwarp daemon, laid out like the
+// Cloudflare WARP desktop app (Home / Connectivity / Settings / Profile / About).
+// It talks to the daemon through the bundled `cwarp` CLI with JSON output.
+
+import SwiftUI
+import AppKit
+
+// MARK: - Models (match the daemon's JSON)
+
+struct TunnelStats: Decodable {
+    var `protocol`: String
+    var endpoint: String
+    var tx_bytes: UInt64
+    var rx_bytes: UInt64
+    var handshake_rtt: String?
+    var tls: String?
+}
+
+struct DNSStats: Decodable { var queries: UInt64; var fallback_queries: UInt64; var failures: UInt64 }
+
+struct Status: Decodable {
+    var status: String
+    var reason: String?
+    var error: String?
+    var mode: String
+    var mode_label: String
+    var `protocol`: String
+    var registered: Bool
+    var account_type: String?
+    var warp_plus: Bool
+    var interface: String?
+    var interface_v4: String?
+    var interface_v6: String?
+    var proxy: String?
+    var dns_protocol: String
+    var tunnel: TunnelStats?
+    var dns: DNSStats?
+    var network: String?
+}
+
+struct Settings: Decodable {
+    var mode: String
+    var `protocol`: String
+    var always_on: Bool
+    var families: String
+    var proxy_port: Int
+    var endpoint_override: String?
+    var mtu: Int
+    var split_mode: String
+    var split_ips: [String]?
+    var fallback_domains: [String]?
+    var trusted_ssids: [String]?
+    var disable_wifi: Bool
+    var disable_ethernet: Bool
+    var post_quantum: Bool
+}
+
+struct Registration: Decodable {
+    var id: String
+    var account_type: String
+    var warp_plus: Bool
+    var license: String
+    var public_key: String
+    var key_type: String
+    var interface_v4: String
+    var interface_v6: String
+    var premium_data: Int64
+    var quota: Int64
+}
+
+struct Device: Decodable, Identifiable {
+    var id: String
+    var type: String
+    var model: String
+    var name: String
+    var active: Bool
+}
+
+let modes: [(String, String)] = [
+    ("warp", "Traffic and DNS (UDP)"), ("warp+doh", "Traffic and DNS (HTTPS)"), ("warp+dot", "Traffic and DNS (TLS)"),
+    ("doh", "DNS only (HTTPS)"), ("dot", "DNS only (TLS)"), ("tunnel_only", "Traffic only"),
+    ("proxy", "Local proxy (SOCKS5/HTTP)"),
+]
+
+// MARK: - CLI bridge
+
+enum CLI {
+    static var path: String = {
+        if let p = Bundle.main.path(forResource: "cwarp", ofType: nil) { return p }
+        return "/usr/local/bin/cwarp"
+    }()
+
+    /// Runs `cwarp -j args…` off the main thread.
+    static func run(_ args: [String]) async -> (Data, String?) {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global().async {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: path)
+                p.arguments = ["-j"] + args
+                let out = Pipe(), err = Pipe()
+                p.standardOutput = out
+                p.standardError = err
+                do { try p.run() } catch {
+                    cont.resume(returning: (Data(), "cannot run \(path): \(error.localizedDescription)"))
+                    return
+                }
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let e = err.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                let msg = String(data: e, encoding: .utf8)?
+                    .replacingOccurrences(of: "Error: ", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                cont.resume(returning: (data, p.terminationStatus == 0 ? nil : (msg?.isEmpty == false ? msg : "failed")))
+            }
+        }
+    }
+}
+
+// MARK: - Store
+
+@MainActor
+final class Store: ObservableObject {
+    @Published var status: Status?
+    @Published var settings: Settings?
+    @Published var registration: Registration?
+    @Published var devices: [Device] = []
+    @Published var daemonError: String?
+    @Published var toast: String?
+    @Published var busy = false
+    private var timer: Timer?
+    private var tick = 0
+
+    init() {
+        // Status every 1.5s; settings/registration every ~6s so changes made
+        // from the CLI show up too.
+        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.tick += 1
+                if self.tick % 4 == 0 { await self.refreshAll() } else { await self.refreshStatus() }
+            }
+        }
+        Task { await refreshAll() }
+    }
+
+    var connected: Bool { status?.status == "Connected" }
+    var wantsOn: Bool {
+        if let s = status?.status, ["Connected", "Connecting", "Paused"].contains(s) { return true }
+        return settings?.always_on ?? false
+    }
+    var mode: String { status?.mode ?? settings?.mode ?? "warp" }
+
+    func refreshStatus() async {
+        let (d, err) = await CLI.run(["status"])
+        if let err { daemonError = err; status = nil; return }
+        daemonError = nil
+        status = try? JSONDecoder().decode(Status.self, from: d)
+    }
+
+    func refreshAll() async {
+        await refreshStatus()
+        guard daemonError == nil else { return }
+        let (s, _) = await CLI.run(["settings"])
+        settings = try? JSONDecoder().decode(Settings.self, from: s)
+        let (r, rerr) = await CLI.run(["registration", "show"])
+        registration = rerr == nil ? try? JSONDecoder().decode(Registration.self, from: r) : nil
+    }
+
+    func loadDevices() async {
+        let (d, err) = await CLI.run(["registration", "devices"])
+        if let err { toast = err; return }
+        devices = (try? JSONDecoder().decode([Device].self, from: d)) ?? []
+    }
+
+    /// Runs a command, surfaces errors, then refreshes everything.
+    func act(_ args: [String]) {
+        Task {
+            busy = true
+            let (_, err) = await CLI.run(args)
+            busy = false
+            if let err { toast = err }
+            await refreshAll()
+        }
+    }
+
+    func toggle() { act([wantsOn ? "disconnect" : "connect"]) }
+}
+
+// MARK: - Views
+
+enum Page: String, CaseIterable, Identifiable {
+    case home = "Home", connectivity = "Connectivity", settings = "Settings", profile = "Profile", about = "About"
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .home: "globe"
+        case .connectivity: "point.3.connected.trianglepath.dotted"
+        case .settings: "gearshape"
+        case .profile: "person"
+        case .about: "cloud"
+        }
+    }
+}
+
+struct ContentView: View {
+    @EnvironmentObject var store: Store
+    @State private var page: Page? = .home
+
+    var body: some View {
+        NavigationSplitView {
+            List(Page.allCases, selection: $page) { p in
+                Label(p.rawValue, systemImage: p.icon).tag(p)
+            }
+            .navigationSplitViewColumnWidth(170)
+        } detail: {
+            Group {
+                if let err = store.daemonError {
+                    DaemonDown(error: err)
+                } else {
+                    switch page ?? .home {
+                    case .home: HomeView()
+                    case .connectivity: ConnectivityView()
+                    case .settings: SettingsView()
+                    case .profile: ProfileView()
+                    case .about: AboutView()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 720, minHeight: 600)
+        .alert("cwarp", isPresented: Binding(get: { store.toast != nil }, set: { if !$0 { store.toast = nil } })) {
+            Button("OK") { store.toast = nil }
+        } message: { Text(store.toast ?? "") }
+    }
+}
+
+struct DaemonDown: View {
+    var error: String
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 44)).foregroundStyle(.orange)
+            Text("The cwarp service is not running").font(.title2.bold())
+            Text("Install it once with:").foregroundStyle(.secondary)
+            Text("sudo \(CLI.path) service install").font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                .padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            Text(error).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 40)
+        }
+    }
+}
+
+struct HomeView: View {
+    @EnvironmentObject var store: Store
+    var body: some View {
+        let st = store.status
+        let state = st?.status ?? "Disconnected"
+        VStack(spacing: 18) {
+            Spacer()
+            ZStack {
+                Image(systemName: "cloud.fill").font(.system(size: 110))
+                    .foregroundStyle(state == "Connected" ? Color.orange : Color.gray.opacity(0.5))
+                Image(systemName: state == "Connected" ? "checkmark" : state == "Connecting" ? "ellipsis" : state == "Paused" ? "pause" : "xmark")
+                    .font(.system(size: 30, weight: .bold)).foregroundStyle(.white).offset(y: 8)
+            }
+            Text(state).font(.system(size: 34, weight: .bold))
+            Text(subtitle(state, st)).foregroundStyle(.secondary)
+            if st?.registered == false {
+                Text("This device is not registered yet.").foregroundStyle(.secondary)
+                Button("Accept Terms of Service & Register") { store.act(["registration", "new", "--accept-tos"]) }
+                    .buttonStyle(.borderedProminent)
+                Link("Cloudflare WARP Terms", destination: URL(string: "https://www.cloudflare.com/application/terms/")!).font(.caption)
+            } else {
+                Toggle("", isOn: Binding(get: { store.wantsOn }, set: { _ in store.toggle() }))
+                    .toggleStyle(.switch).controlSize(.large).labelsHidden().disabled(store.busy)
+            }
+            if let e = st?.error, state != "Connected" {
+                Text(e).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center).padding(.horizontal, 40)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Mode").font(.headline)
+                ModePicker()
+            }.frame(width: 300).padding(.top, 20)
+            Spacer()
+            Text("cwarp — a Cloudflare WARP compatible client").font(.footnote).foregroundStyle(.secondary).padding(.bottom)
+        }
+    }
+
+    func subtitle(_ s: String, _ st: Status?) -> String {
+        switch s {
+        case "Connected":
+            if let p = st?.proxy { return "Proxy listening on \(p)" }
+            return st?.mode.hasPrefix("do") == true ? "Your DNS queries are private." : "Your Internet is private."
+        case "Connecting": return st?.reason ?? "Connecting…"
+        case "Paused": return st?.reason ?? "Paused"
+        default: return "Your Internet is not private."
+        }
+    }
+}
+
+struct ModePicker: View {
+    @EnvironmentObject var store: Store
+    var body: some View {
+        Picker("", selection: Binding(get: { store.mode }, set: { store.act(["mode", $0]) })) {
+            ForEach(modes, id: \.0) { Text($0.1).tag($0.0) }
+        }.labelsHidden()
+    }
+}
+
+struct Row<V: View>: View {
+    var title: String
+    var subtitle: String? = nil
+    @ViewBuilder var trailing: V
+    var body: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).fontWeight(.semibold)
+                if let subtitle { Text(subtitle).font(.callout).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 20)
+            trailing
+        }.padding(.vertical, 4)
+    }
+}
+
+func human(_ n: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .binary) }
+
+struct ConnectivityView: View {
+    @EnvironmentObject var store: Store
+    var body: some View {
+        let st = store.status
+        Form {
+            Section("DNS connection") {
+                Row(title: "DNS protocol") { Text(st?.dns_protocol ?? "off") }
+                if let d = st?.dns { Row(title: "DNS queries") { Text("\(d.queries) (fallback \(d.fallback_queries), failed \(d.failures))") } }
+            }
+            Section("Tunnel connection") {
+                Row(title: "Connection status") {
+                    Text(st?.status ?? "—").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+                        .background((st?.status == "Connected" ? Color.green : Color.red).opacity(0.25), in: Capsule())
+                }
+                Row(title: "WARP tunnel protocol") { Text(st?.tunnel?.protocol ?? "N/A") }
+                if let t = st?.tunnel {
+                    Row(title: "Edge endpoint") { Text(t.endpoint).textSelection(.enabled) }
+                    if let tls = t.tls { Row(title: "TLS") { Text(tls) } }
+                    if let rtt = t.handshake_rtt { Row(title: "Handshake time") { Text(rtt) } }
+                    Row(title: "Sent / received") { Text("\(human(t.tx_bytes)) / \(human(t.rx_bytes))") }
+                }
+                if let n = st?.network, !n.isEmpty { Row(title: "Network") { Text(n) } }
+            }
+            Section {
+                Row(title: "Encryption keys", subtitle: "Generate a new key pair, keeping the current registration") {
+                    Button("Reset keys") { store.act(["tunnel", "rotate-keys"]) }
+                }
+            }
+        }.formStyle(.grouped).navigationTitle("Connectivity")
+    }
+}
+
+struct ListEditor: View {
+    var title: String
+    var help: String
+    var items: [String]
+    var add: (String) -> Void
+    var remove: (String) -> Void
+    var reset: () -> Void
+    @Environment(\.dismiss) var dismiss
+    @State private var draft = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.title2.bold())
+            Text(help).foregroundStyle(.secondary)
+            HStack {
+                TextField("Add…", text: $draft).onSubmit(commit)
+                Button("Add", action: commit).disabled(draft.isEmpty)
+            }
+            List(items, id: \.self) { item in
+                HStack {
+                    Text(item).font(.system(.body, design: .monospaced))
+                    Spacer()
+                    Button(role: .destructive) { remove(item) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+                }
+            }.frame(minHeight: 260)
+            HStack {
+                Button("Restore defaults", action: reset)
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(20).frame(width: 480, height: 480)
+    }
+    func commit() { let d = draft.trimmingCharacters(in: .whitespaces); if !d.isEmpty { add(d) }; draft = "" }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject var store: Store
+    @State private var sheet: String?
+    @State private var port = ""
+    @State private var endpoint = ""
+
+    var body: some View {
+        let s = store.settings
+        Form {
+            Section { Row(title: "Mode") { ModePicker().frame(width: 260) } }
+            Section {
+                Row(title: "WARP tunnel protocol", subtitle: "MASQUE (HTTP/3, QUIC) is the default; WireGuard is the classic protocol") {
+                    Picker("", selection: Binding(get: { s?.protocol ?? "masque" }, set: { store.act(["tunnel", "protocol", "set", $0]) })) {
+                        Text("MASQUE").tag("masque"); Text("WireGuard").tag("wireguard")
+                    }.labelsHidden().frame(width: 160)
+                }
+                Row(title: "Post-quantum key agreement", subtitle: "X25519MLKEM768 for MASQUE") {
+                    Toggle("", isOn: Binding(get: { s?.post_quantum ?? true }, set: { store.act(["tunnel", "pq", $0 ? "on" : "off"]) })).labelsHidden()
+                }
+            }
+            Section {
+                Row(title: "Pause for Wi-Fi networks", subtitle: "cwarp will pause when connected to one of the configured Wi-Fi networks.") {
+                    Button("Configure") { sheet = "ssid" }
+                }
+                Row(title: "Disable for all Wi-Fi networks") {
+                    Toggle("", isOn: Binding(get: { s?.disable_wifi ?? false }, set: { store.act(["trusted", "wifi", $0 ? "enable" : "disable"]) })).labelsHidden()
+                }
+                Row(title: "Disable for all wired networks") {
+                    Toggle("", isOn: Binding(get: { s?.disable_ethernet ?? false }, set: { store.act(["trusted", "ethernet", $0 ? "enable" : "disable"]) })).labelsHidden()
+                }
+            }
+            Section {
+                Row(title: "1.1.1.1 for Families") {
+                    Picker("", selection: Binding(get: { s?.families ?? "off" }, set: { store.act(["dns", "families", $0]) })) {
+                        Text("None").tag("off"); Text("Block malware").tag("malware"); Text("Block malware and adult content").tag("full")
+                    }.labelsHidden().frame(width: 260)
+                }
+            }
+            Section {
+                Row(title: "Split Tunnel", subtitle: "Choose which traffic bypasses Cloudflare's network (\(s?.split_mode ?? "exclude") mode).") {
+                    Button("Configure") { sheet = "split" }
+                }
+                Row(title: "Local Domain Fallback", subtitle: "Send queries for these suffixes to local network DNS servers.") {
+                    Button("Configure") { sheet = "fallback" }
+                }
+            }
+            Section("Advanced") {
+                Row(title: "Proxy port", subtitle: "Used in Local proxy mode (127.0.0.1:port)") {
+                    TextField("\(s?.proxy_port ?? 40000)", text: $port).frame(width: 90)
+                        .onSubmit { store.act(["proxy", "port", port]); port = "" }
+                }
+                Row(title: "Endpoint override", subtitle: "Force a specific edge IP:PORT, empty for automatic") {
+                    TextField(s?.endpoint_override ?? "automatic", text: $endpoint).frame(width: 200)
+                        .onSubmit { store.act(endpoint.isEmpty ? ["tunnel", "endpoint", "reset"] : ["tunnel", "endpoint", "set", endpoint]); endpoint = "" }
+                }
+                Row(title: "Reset all settings") { Button("Reset", role: .destructive) { store.act(["settings", "reset"]) } }
+            }
+        }
+        .formStyle(.grouped).navigationTitle("Settings")
+        .sheet(item: Binding(get: { sheet.map { SheetID(id: $0) } }, set: { sheet = $0?.id })) { id in
+            switch id.id {
+            case "ssid":
+                ListEditor(title: "Trusted Wi-Fi networks", help: "Pause when connected to these SSIDs (macOS needs Location access to read SSIDs).",
+                           items: store.settings?.trusted_ssids ?? [],
+                           add: { store.act(["trusted", "ssid", "add", $0]) }, remove: { store.act(["trusted", "ssid", "remove", $0]) },
+                           reset: { store.act(["trusted", "ssid", "reset"]) })
+            case "split":
+                VStack {
+                    Picker("Mode", selection: Binding(get: { store.settings?.split_mode ?? "exclude" }, set: { store.act(["tunnel", "split-mode", $0]) })) {
+                        Text("Exclude IPs and ranges").tag("exclude"); Text("Include only these IPs").tag("include")
+                    }.pickerStyle(.segmented).padding([.top, .horizontal], 20)
+                    ListEditor(title: "Split Tunnel", help: "IPs/CIDRs that \(store.settings?.split_mode == "include" ? "go through" : "bypass") the tunnel.",
+                               items: store.settings?.split_ips ?? [],
+                               add: { store.act(["tunnel", "ip", "add", $0]) }, remove: { store.act(["tunnel", "ip", "remove", $0]) },
+                               reset: { store.act(["tunnel", "ip", "reset"]) })
+                }
+            default:
+                ListEditor(title: "Local Domain Fallback", help: "Domain suffixes resolved by your local network's DNS servers.",
+                           items: store.settings?.fallback_domains ?? [],
+                           add: { store.act(["dns", "fallback", "add", $0]) }, remove: { store.act(["dns", "fallback", "remove", $0]) },
+                           reset: { store.act(["dns", "fallback", "reset"]) })
+            }
+        }
+    }
+}
+
+struct SheetID: Identifiable { var id: String }
+
+struct ProfileView: View {
+    @EnvironmentObject var store: Store
+    @State private var newKey = ""
+    @State private var editing = false
+    var body: some View {
+        let r = store.registration
+        Form {
+            Section("Account information") {
+                if let r {
+                    Row(title: "License Key") {
+                        VStack(alignment: .trailing) {
+                            Text(r.license).textSelection(.enabled).font(.system(.body, design: .monospaced))
+                            Button("Change key") { editing = true }
+                        }
+                    }
+                    Row(title: "Account type") { Text(r.account_type == "free" ? "WARP" : "WARP+ (\(r.account_type))") }
+                    if r.account_type != "free" {
+                        Row(title: "WARP+ data") { Text(ByteCountFormatter.string(fromByteCount: r.premium_data, countStyle: .decimal)) }
+                    }
+                    Row(title: "Device ID") { Text(r.id).textSelection(.enabled).font(.caption) }
+                    Row(title: "Tunnel key type") { Text(r.key_type == "secp256r1" ? "secp256r1 (MASQUE)" : "curve25519 (WireGuard)") }
+                } else {
+                    Text("Not registered").foregroundStyle(.secondary)
+                    Button("Accept Terms of Service & Register") { store.act(["registration", "new", "--accept-tos"]) }
+                }
+            }
+            if r != nil {
+                Section("Devices using your license key") {
+                    if store.devices.isEmpty { Button("Load devices") { Task { await store.loadDevices() } } }
+                    ForEach(store.devices) { d in
+                        Row(title: d.type) { Text(d.model + (d.active ? "" : " (inactive)")) }
+                    }
+                }
+                Section("Device information") {
+                    Row(title: "Client Interface IPv4") { Text(r!.interface_v4).textSelection(.enabled) }
+                    Row(title: "Client Interface IPv6") { Text(r!.interface_v6).textSelection(.enabled) }
+                    if let n = store.status?.network, !n.isEmpty { Row(title: "Connection type") { Text(n) } }
+                }
+                Section {
+                    Row(title: "Delete registration", subtitle: "Removes this device from Cloudflare") {
+                        Button("Delete", role: .destructive) { store.act(["registration", "delete"]) }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped).navigationTitle("Profile")
+        .task { if store.registration != nil { await store.loadDevices() } }
+        .alert("Change license key", isPresented: $editing) {
+            TextField("xxxxxxxx-xxxxxxxx-xxxxxxxx", text: $newKey)
+            Button("Cancel", role: .cancel) {}
+            Button("Apply") { store.act(["registration", "license", newKey]); newKey = "" }
+        } message: { Text("Attach this device to another WARP / WARP+ account.") }
+    }
+}
+
+struct AboutView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "cloud.fill").font(.system(size: 64)).foregroundStyle(.orange)
+            Text("cwarp").font(.largeTitle.bold())
+            Text("Open client for the Cloudflare WARP network").foregroundStyle(.secondary)
+            Text("Protocols: MASQUE (HTTP/3 CONNECT-IP) and WireGuard").font(.callout)
+            Link("Cloudflare WARP Terms of Service", destination: URL(string: "https://www.cloudflare.com/application/terms/")!)
+            Link("Privacy policy", destination: URL(string: "https://www.cloudflare.com/application/privacypolicy/")!)
+            Text("Not affiliated with or endorsed by Cloudflare.").font(.caption).foregroundStyle(.secondary).padding(.top)
+        }
+    }
+}
+
+struct MenuContent: View {
+    @EnvironmentObject var store: Store
+    @Environment(\.openWindow) var openWindow
+    var body: some View {
+        Text("cwarp: \(store.status?.status ?? (store.daemonError != nil ? "service not running" : "…"))")
+        if let t = store.status?.tunnel { Text("\(t.protocol) · \(t.endpoint)") }
+        Divider()
+        Button(store.wantsOn ? "Disconnect" : "Connect") { store.toggle() }.disabled(store.status?.registered != true)
+        Button("Open cwarp…") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+        Divider()
+        Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+}
+
+@main
+struct CWarpApp: App {
+    @StateObject private var store = Store()
+    var body: some Scene {
+        Window("cwarp", id: "main") {
+            ContentView().environmentObject(store)
+        }
+        .defaultSize(width: 760, height: 640)
+        MenuBarExtra {
+            MenuContent().environmentObject(store)
+        } label: {
+            Image(systemName: store.connected ? "cloud.fill" : "cloud")
+        }
+    }
+}
