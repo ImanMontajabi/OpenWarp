@@ -1,0 +1,110 @@
+name: macOS app
+
+# The SwiftUI app: compile checks, unit/contract/snapshot tests and XCUITest UI tests; every job is a required
+# check in the "Protect main" ruleset. Snapshot goldens are kept per exact macOS version; the ones for this
+# runner image live in ui/macos/Tests/__Snapshots__/macOS-<version>. When the image moves to a new macOS version
+# the snapshot tests are skipped and this workflow warns: run it by hand with record_snapshots, review the PNGs
+# in the uploaded artifact and commit them. UI tests drive the UITest build against its in-process fake daemon:
+# no OpenWarp daemon, network changes, root or Cloudflare account.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      record_snapshots:
+        description: Re-record the snapshot goldens for this runner's macOS version (uploaded as an artifact)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: macos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: macOS app (build, unit and snapshot tests)
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-xcode
+
+      # The distribution build (build.sh) compiles ui/macos/*.swift with swiftc, without DEBUG, for both
+      # architectures. Warnings fail the build.
+      - name: swiftc release compile (arm64, x86_64)
+        run: |
+          for arch in arm64 x86_64; do
+            swiftc -O -parse-as-library -warnings-as-errors -target "$arch-apple-macos14.0" ui/macos/*.swift -o "$RUNNER_TEMP/OpenWarp-$arch"
+          done
+          if nm "$RUNNER_TEMP/OpenWarp-arm64" | grep -q FakeDaemon; then
+            echo "::error::the release binary contains test-only FakeDaemon code"; exit 1
+          fi
+
+      - name: Xcode Release build (warnings are errors)
+        run: |
+          xcodebuild -project OpenWarp.xcodeproj -scheme OpenWarp -configuration Release \
+            -destination 'platform=macOS' SWIFT_TREAT_WARNINGS_AS_ERRORS=YES build | tail -n 20
+
+      - name: Unit, contract and snapshot tests
+        env:
+          TEST_RUNNER_OPENWARP_SNAPSHOT_ARTIFACTS: ${{ runner.temp }}/snapshots
+          TEST_RUNNER_OPENWARP_RECORD_SNAPSHOTS: ${{ inputs.record_snapshots && '1' || '' }}
+        run: |
+          xcodebuild -project OpenWarp.xcodeproj -scheme OpenWarp -destination 'platform=macOS' \
+            -resultBundlePath "$RUNNER_TEMP/OpenWarpTests.xcresult" test 2>&1 \
+            | grep -E '(Test Suite|Test Case.*(passed|failed|skipped)|error:|skipped|Executed|\*\* TEST)' | tee "$RUNNER_TEMP/unit.log" | tail -n 120
+          if grep -q 'no snapshot goldens for' "$RUNNER_TEMP/unit.log"; then
+            echo "::warning::Snapshot tests were skipped: no goldens for this runner's macOS version ($(sw_vers -productVersion)). Run this workflow with record_snapshots and commit the PNGs."
+          fi
+
+      - name: Upload recorded snapshots
+        if: inputs.record_snapshots
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snapshots-macOS-${{ runner.os }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/snapshots
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpenWarpTests
+          path: |
+            ${{ runner.temp }}/OpenWarpTests.xcresult
+            ${{ runner.temp }}/snapshots
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ui:
+    name: macOS app (UI tests)
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-xcode
+      - name: XCUITest
+        run: |
+          xcodebuild -project OpenWarp.xcodeproj -scheme OpenWarpUITests -destination 'platform=macOS' \
+            -resultBundlePath "$RUNNER_TEMP/OpenWarpUITests.xcresult" test 2>&1 \
+            | grep -E '(Test Suite|Test Case.*(passed|failed|skipped)|error:|Executed|\*\* TEST)' | tail -n 120
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpenWarpUITests
+          path: ${{ runner.temp }}/OpenWarpUITests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7

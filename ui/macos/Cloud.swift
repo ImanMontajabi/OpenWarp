@@ -64,13 +64,14 @@ struct CloudButton: View {
         .buttonStyle(CloudPressStyle())
         .disabled(!enabled)
         .accessibilityLabel(label)
+        .accessibilityIdentifier("cloud")
         .help(label)
     }
 }
 
 private struct CloudPressStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
     @State private var hovering = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -87,7 +88,7 @@ private struct CloudPressStyle: ButtonStyle {
 private struct CloudFigure: View {
     var look: CloudLook
     var accent: RGB
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
 
     private var animating: Bool { !reduce && (look == .connecting || look == .connected) }
 

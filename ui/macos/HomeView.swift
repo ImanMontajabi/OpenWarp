@@ -16,7 +16,7 @@ struct HomeView: View {
                 CloudButton(look: look, accent: tint.accent,
                             enabled: store.registered && !store.busy && st != nil,
                             label: store.wantsOn ? "Disconnect" : "Connect",
-                            action: store.toggle)
+                            action: { store.toggle() })
                     .padding(.top, Space.md)
 
                 VStack(spacing: Space.xxs) {
@@ -24,10 +24,12 @@ struct HomeView: View {
                         .foregroundStyle(Palette.text)
                         .contentTransition(.opacity)
                         .accessibilityAddTraits(.updatesFrequently)
+                        .accessibilityIdentifier("home.status")
                     Text(subtitle(state, st)).font(Typo.body)
                         .foregroundStyle(state == .retrying ? Palette.danger.color : Palette.textSecondary)
                         .multilineTextAlignment(.center).lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("home.detail")
                 }
                 .motion(Motion.standard, value: state)
 
@@ -156,6 +158,7 @@ struct ModeTile: View {
         .motion(Motion.standard, value: selected)
         .motion(Motion.quick, value: hovering)
         .accessibilityLabel(mode.fullName)
+        .accessibilityIdentifier("mode.\(mode.id)")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .help(mode.fullName)
     }
@@ -183,7 +186,7 @@ struct ModeTile: View {
 }
 
 private struct TilePressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduce ? 0.97 : 1)

@@ -1,0 +1,82 @@
+# XcodeGen spec for the SwiftUI app and its tests: `xcodegen generate` creates OpenWarp.xcodeproj (ignored by git).
+# build.sh stays the distribution build (universal binary with the Go CLI embedded); this project is for
+# development and the CI test jobs.
+#
+#   OpenWarp         the app (sources: ui/macos/*.swift)
+#   OpenWarpTests    unit, contract and snapshot tests; compiles the app sources itself (no host app), so running
+#                    them never launches OpenWarp or touches the daemon
+#   OpenWarpUITests  XCUITest; drives a UITest build (own bundle id, in-process fake daemon), never your real app
+name: OpenWarp
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+  UITest: debug
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+targets:
+  OpenWarp:
+    type: application
+    platform: macOS
+    sources:
+      - path: ui/macos
+        excludes: ["Tests/**", "UITests/**", "legacy-backup/**"]
+    settings:
+      base:
+        PRODUCT_NAME: OpenWarp
+        PRODUCT_BUNDLE_IDENTIFIER: local.openwarp.app
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: OpenWarp
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Iman Montajabi. MIT License."
+      configs:
+        UITest:
+          PRODUCT_BUNDLE_IDENTIFIER: local.openwarp.app.uitest
+  OpenWarpTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: ui/macos
+        excludes: ["OpenWarpApp.swift", "UITests/**", "legacy-backup/**"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.openwarp.tests
+        GENERATE_INFOPLIST_FILE: YES
+  OpenWarpUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [ui/macos/UITests]
+    dependencies:
+      - target: OpenWarp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.openwarp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: OpenWarp
+schemes:
+  OpenWarp:
+    build:
+      targets:
+        OpenWarp: all
+    test:
+      config: Debug
+      targets: [OpenWarpTests]
+  OpenWarpUITests:
+    build:
+      targets:
+        OpenWarp: all
+        OpenWarpUITests: [test]
+    test:
+      config: UITest
+      targets: [OpenWarpUITests]

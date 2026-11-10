@@ -1,0 +1,23 @@
+name: Set up Xcode and XcodeGen
+description: Select the newest stable Xcode on the runner, install XcodeGen and generate OpenWarp.xcodeproj.
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode
+      shell: bash
+      run: |
+        set -euo pipefail
+        ls -d /Applications/Xcode*.app
+        xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|_rc|release.candidate' | sort -V | tail -n1)"
+        sudo xcode-select -s "$xcode"
+        xcodebuild -version
+        sw_vers
+    - name: Generate the Xcode project
+      shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      run: |
+        brew install xcodegen
+        xcodegen generate

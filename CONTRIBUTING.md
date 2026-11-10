@@ -40,7 +40,20 @@ go test ./... -race -count=1
 ./build.sh                       # full build of the CLI and the app
 ```
 
-CI also runs `staticcheck`, `govulncheck` and a secret scan; see `.github/workflows/`.
+For changes to the SwiftUI app (`ui/macos`), also run its tests. They need Xcode and
+[XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`):
+
+```sh
+scripts/test-app.sh              # unit, contract and snapshot tests (opens no windows)
+scripts/test-app.sh ui           # plus the XCUITest UI tests (they drive the mouse and keyboard)
+scripts/test-app.sh record       # re-record snapshot goldens after an intended visual change
+```
+
+`OpenWarp.xcodeproj` is generated from `project.yml` and not committed. UI tests run the app against an
+in-process fake daemon (`ui/macos/FakeDaemon.swift`, Debug builds only), so they need no daemon or network.
+Commit re-recorded snapshot PNGs only after reviewing the visual diff, and mention it in the PR.
+
+CI also runs `staticcheck`, `govulncheck`, CodeQL (Go and Swift) and a secret scan; see `.github/workflows/`.
 
 ## Changelog
 
@@ -50,7 +63,8 @@ Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for any user-
 
 - Go: standard library first, `gofmt`, small packages. macOS-only code goes behind `//go:build darwin`.
 - Swift: follow the existing structure in `ui/macos` and the UI rules in [CLAUDE.md](CLAUDE.md) (dark, flat,
-  no placeholder values shown as live data, Reduce Motion respected).
+  no placeholder values shown as live data, Reduce Motion respected through `\.owReduceMotion`). Give new
+  interactive controls an `accessibilityIdentifier` so UI tests can find them.
 - The CLI's `-j` JSON output is a contract with the app; change the Go structs and `ui/macos/Models.swift`
   together.
 

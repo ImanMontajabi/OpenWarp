@@ -20,6 +20,7 @@ struct Page<Content: View>: View {
                     if let title {
                         Text(title).font(Typo.pageTitle).foregroundStyle(Palette.text)
                             .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("page.title")
                     }
                     content
                 }
@@ -29,6 +30,7 @@ struct Page<Content: View>: View {
                 .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: centered ? .center : .top)
             }
             .scrollIndicators(.automatic)
+            .accessibilityIdentifier("page.scroll")
         }
     }
 }
@@ -102,13 +104,16 @@ struct Row<Trailing: View>: View {
                 }
             }
             .layoutPriority(1)
+            .accessibilityElement(children: .combine)
             Spacer(minLength: Space.xs)
             trailing
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
         .frame(minHeight: Metrics.rowMinHeight)
-        .accessibilityElement(children: .combine)
+        // Not .combine: that folds the trailing toggle or button into one element spanning the whole row,
+        // so it loses its own identity and a click on the element's centre lands on the text.
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -157,7 +162,13 @@ struct ValueRow: View {
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
         .frame(minHeight: Metrics.rowMinHeight)
-        .accessibilityElement(children: .combine)
+        // Explicit label and value: .combine dropped the (selectable) value and kept only the copy button.
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)   // a plain group exposes no value on macOS
+        .accessibilityLabel(title)
+        .accessibilityValue(value ?? "Unknown")
+        .accessibilityIdentifier("value.\(title)")
+        .modifier(CopyAction(value: copyable ? value : nil, label: title))
     }
 
     private var titleText: some View {
@@ -170,6 +181,26 @@ struct ValueRow: View {
             .foregroundStyle(value == nil ? Palette.textTertiary : Palette.textSecondary)
             .textSelection(.enabled)
             .help(value ?? "")
+    }
+}
+
+/// Adds a "Copy <label>" accessibility action when there is a value to copy.
+private struct CopyAction: ViewModifier {
+    var value: String?
+    var label: String
+    func body(content: Content) -> some View {
+        if let value {
+            content.accessibilityAction(named: "Copy \(label)") { Clipboard.copy(value) }
+        } else {
+            content
+        }
+    }
+}
+
+enum Clipboard {
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
@@ -234,8 +265,7 @@ struct CopyButton: View {
     @State private var copied = false
     var body: some View {
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(value, forType: .string)
+            Clipboard.copy(value)
             copied = true
             Task { try? await Task.sleep(nanoseconds: 1_400_000_000); copied = false }
         } label: {
@@ -304,6 +334,7 @@ struct Segmented<T: Hashable>: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
+                .accessibilityIdentifier("segment.\(value)")
             }
         }
         .padding(2)
@@ -360,7 +391,7 @@ struct ChoiceRow: View {
     var onSelect: (String) -> Void
     @State private var open = false
     @Environment(\.owTint) private var tint
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
 
     var body: some View {
         VStack(spacing: 0) {
@@ -378,6 +409,7 @@ struct ChoiceRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint(open ? "Collapse options" : "Show options")
+            .accessibilityIdentifier("choice.\(title)")
 
             Reveal(open: open) {
                 VStack(spacing: 2) {
@@ -398,6 +430,7 @@ struct ChoiceRow: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityAddTraits(on ? .isSelected : [])
+                        .accessibilityIdentifier("choice.option.\(value)")
                     }
                 }
                 .padding(.horizontal, Space.xs).padding(.bottom, Space.xs)
@@ -413,7 +446,7 @@ struct DisclosureSection<Content: View>: View {
     var title: String
     @ViewBuilder var content: Content
     @State private var open = false
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { Accordion.toggle($open, reduceMotion: reduce) } label: {
@@ -474,6 +507,7 @@ struct ToastBanner: View {
                 .foregroundStyle(c.color)
             Text(toast.text).font(Typo.caption).foregroundStyle(Palette.text)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .accessibilityIdentifier("toast.text")
             Spacer(minLength: 0)
             Button(action: dismiss) {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 18, height: 18)
@@ -484,7 +518,10 @@ struct ToastBanner: View {
         .padding(Space.sm)
         .background(Palette.raised.mix(c, 0.10).color, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).strokeBorder(c.color.opacity(0.25)))
-        .accessibilityElement(children: .combine)
+        // A container, not a combined element: combining folds the message into the
+        // Dismiss button, and assistive technology then reads only "Dismiss".
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(toast.kind == .error ? "toast.error" : "toast.success")
     }
 }
 

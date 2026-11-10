@@ -93,6 +93,16 @@ enum ConnState: Equatable {
 
 // MARK: - CLI bridge
 
+/// Runs `openwarp -j <args>` and returns (stdout, error message or nil).
+/// The app uses `CLIBackend`; tests and UI-test launches inject a fake.
+protocol Backend: Sendable {
+    func run(_ args: [String]) async -> (Data, String?)
+}
+
+struct CLIBackend: Backend {
+    func run(_ args: [String]) async -> (Data, String?) { await CLI.run(args) }
+}
+
 enum CLI {
     static var path: String = {
         if let p = Bundle.main.path(forResource: "openwarp", ofType: nil) { return p }
@@ -100,28 +110,36 @@ enum CLI {
     }()
 
     /// Runs `openwarp -j args…` off the main thread.
-    static func run(_ args: [String]) async -> (Data, String?) {
+    static func run(_ args: [String]) async -> (Data, String?) { await run(args, executable: path) }
+
+    /// Runs `executable -j args…` off the main thread. A non-zero exit becomes an
+    /// error message taken from stderr, without the CLI's "Error: " prefix.
+    static func run(_ args: [String], executable: String) async -> (Data, String?) {
         await withCheckedContinuation { cont in
             DispatchQueue.global().async {
                 let p = Process()
-                p.executableURL = URL(fileURLWithPath: path)
+                p.executableURL = URL(fileURLWithPath: executable)
                 p.arguments = ["-j"] + args
                 let out = Pipe(), err = Pipe()
                 p.standardOutput = out
                 p.standardError = err
                 do { try p.run() } catch {
-                    cont.resume(returning: (Data(), "cannot run \(path): \(error.localizedDescription)"))
+                    cont.resume(returning: (Data(), "cannot run \(executable): \(error.localizedDescription)"))
                     return
                 }
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 let e = err.fileHandleForReading.readDataToEndOfFile()
                 p.waitUntilExit()
-                let msg = String(data: e, encoding: .utf8)?
-                    .replacingOccurrences(of: "Error: ", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                cont.resume(returning: (data, p.terminationStatus == 0 ? nil : (msg?.isEmpty == false ? msg : "failed")))
+                cont.resume(returning: (data, p.terminationStatus == 0 ? nil : errorMessage(e)))
             }
         }
+    }
+
+    static func errorMessage(_ stderr: Data) -> String {
+        let msg = String(data: stderr, encoding: .utf8)?
+            .replacingOccurrences(of: "Error: ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return msg?.isEmpty == false ? msg! : "failed"
     }
 }
 
@@ -147,10 +165,14 @@ final class Store: ObservableObject {
     /// Values the user just chose, shown until the daemon confirms them, so
     /// controls don't snap back while the CLI round-trip is in flight.
     @Published private(set) var pending: [String: String] = [:]
+    private let backend: Backend
     private var timer: Timer?
     private var tick = 0
 
-    init() {
+    /// `polling: false` (tests) skips the timer and the initial refresh.
+    init(backend: Backend = CLIBackend(), polling: Bool = true) {
+        self.backend = backend
+        guard polling else { return }
         // Status every 1.5s; settings/registration every ~6s so changes made
         // from the CLI show up too.
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -175,7 +197,7 @@ final class Store: ObservableObject {
     func pendingValue(_ key: String) -> String? { pending[key] }
 
     func refreshStatus() async {
-        let (d, err) = await CLI.run(["status"])
+        let (d, err) = await backend.run(["status"])
         if let err { daemonError = err; status = nil; return }
         daemonError = nil
         status = try? JSONDecoder().decode(Status.self, from: d)
@@ -184,24 +206,26 @@ final class Store: ObservableObject {
     func refreshAll() async {
         await refreshStatus()
         guard daemonError == nil else { return }
-        let (s, _) = await CLI.run(["settings"])
+        let (s, _) = await backend.run(["settings"])
         settings = try? JSONDecoder().decode(Settings.self, from: s)
-        let (r, rerr) = await CLI.run(["registration", "show"])
+        let (r, rerr) = await backend.run(["registration", "show"])
         registration = rerr == nil ? try? JSONDecoder().decode(Registration.self, from: r) : nil
     }
 
     func loadDevices() async {
-        let (d, err) = await CLI.run(["registration", "devices"])
+        let (d, err) = await backend.run(["registration", "devices"])
         if let err { show(.error, err); return }
         devices = (try? JSONDecoder().decode([Device].self, from: d)) ?? []
         devicesLoaded = true
     }
 
     /// Runs a command, surfaces errors, then refreshes everything.
-    func act(_ args: [String], success: String? = nil) {
+    /// The returned task lets tests wait for completion; views ignore it.
+    @discardableResult
+    func act(_ args: [String], success: String? = nil) -> Task<Void, Never> {
         Task {
             busy = true
-            let (_, err) = await CLI.run(args)
+            let (_, err) = await backend.run(args)
             busy = false
             if let err { show(.error, err) } else if let success { show(.success, success) }
             await refreshAll()
@@ -209,17 +233,19 @@ final class Store: ObservableObject {
     }
 
     /// Like `act`, but shows `value` for `key` immediately until the daemon confirms.
-    func set(_ key: String, _ value: String, _ args: [String]) {
+    @discardableResult
+    func set(_ key: String, _ value: String, _ args: [String]) -> Task<Void, Never> {
         pending[key] = value
-        Task {
-            let (_, err) = await CLI.run(args)
+        return Task {
+            let (_, err) = await backend.run(args)
             if let err { show(.error, err) }
             await refreshAll()
             pending[key] = nil
         }
     }
 
-    func toggle() { act([wantsOn ? "disconnect" : "connect"]) }
+    @discardableResult
+    func toggle() -> Task<Void, Never> { act([wantsOn ? "disconnect" : "connect"]) }
 
     func show(_ kind: Toast.Kind, _ text: String) { toast = Toast(kind: kind, text: text) }
 }
