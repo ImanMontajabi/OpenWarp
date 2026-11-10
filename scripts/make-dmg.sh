@@ -26,15 +26,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 1. Staging folder: the app (ditto keeps the signature and permissions), the Applications link, the
-#    HiDPI background and the volume icon.
+# 1. Staging folder: the app (ditto keeps the signature and permissions), the Applications link and the
+#    HiDPI background.
 STAGE="$WORK/stage"
 mkdir -p "$STAGE/.background"
 ditto "$APP" "$STAGE/OpenWarp.app"
 ln -s /Applications "$STAGE/Applications"
 tiffutil -cathidpicheck "$ROOT/assets/dmg/background.png" "$ROOT/assets/dmg/background@2x.png" \
   -out "$STAGE/.background/background.tiff" >/dev/null 2>&1
-cp "$APP/Contents/Resources/AppIcon.icns" "$STAGE/.VolumeIcon.icns"
 
 # 2. A writable image to lay out.
 SIZE_MB=$(( $(du -sm "$STAGE" | cut -f1) + 20 ))
@@ -42,10 +41,6 @@ hdiutil create -quiet -srcfolder "$STAGE" -volname "$VOL" -fs HFS+ -format UDRW 
 MNT=$(hdiutil attach -readwrite -noverify -noautoopen "$WORK/rw.dmg" | sed -n 's|^/dev/[^[:space:]]*[[:space:]]*Apple_HFS[[:space:]]*||p')
 [ -d "$MNT" ] || { echo "could not mount the writable image" >&2; exit 1; }
 DISK=$(basename "$MNT")
-
-# The volume shows its custom icon.
-SetFile=$(xcrun -f SetFile 2>/dev/null || true)
-[ -n "$SetFile" ] && "$SetFile" -a C "$MNT" || echo "note: SetFile not found; the volume keeps the default icon"
 
 # 3. Finder layout: icon view, no toolbar, the background, icons where the background's arrow expects them.
 if [ "${OPENWARP_DMG_PLAIN:-}" != 1 ]; then
@@ -86,7 +81,15 @@ APPLESCRIPT
   [ -s "$MNT/.DS_Store" ] || { echo "error: Finder did not save the window layout" >&2; exit 1; }
 fi
 
+# The volume icon goes in after the Finder layout (Finder dropped it on the CI runner when it was copied
+# in with the staging folder).
+cp "$APP/Contents/Resources/AppIcon.icns" "$MNT/.VolumeIcon.icns"
+SetFile=$(xcrun -f SetFile 2>/dev/null || true)
+if [ -n "$SetFile" ]; then "$SetFile" -a C "$MNT"; else echo "note: SetFile not found; the volume keeps the default icon"; fi
+[ -s "$MNT/.VolumeIcon.icns" ] || { echo "error: volume icon missing" >&2; exit 1; }
+
 chmod -Rf go-w "$MNT" 2>/dev/null || true
+ls -la "$MNT"
 sync
 hdiutil detach "$MNT" -quiet || { sleep 2; hdiutil detach "$MNT" -force -quiet; }
 MNT=""
