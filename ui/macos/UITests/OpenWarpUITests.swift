@@ -289,7 +289,9 @@ final class OpenWarpUITests: XCTestCase {
         XCTAssertTrue(advanced.waitForExistence(timeout: timeout))
         scrollIntoView(advanced)
         advanced.click()
-        let proxyPort = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Proxy port'")).firstMatch
+        // Static text keeps its string in the accessibility value on macOS.
+        let proxyPort = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Proxy port' OR value CONTAINS 'Proxy port'")).firstMatch
         XCTAssertTrue(proxyPort.waitForExistence(timeout: timeout), "Advanced expanded")
         open("Home")
         XCTAssertTrue(cloud.waitForExistence(timeout: timeout))
@@ -316,14 +318,18 @@ final class OpenWarpUITests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: timeout))
         scrollIntoView(toggle)
         XCTAssertEqual(isOn(toggle), true, "on by default")
-        let status = element("updates.status")
-        XCTAssertTrue(wait("label CONTAINS 'latest version'", on: status), "the launch check found no newer version (is \(status.label))")
+        let latest = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'latest version' OR value CONTAINS 'latest version'")).firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: timeout), "the launch check found no newer version")
         toggle.click()
         XCTAssertTrue(wait("value == 0", on: toggle))
         let check = app.buttons["updates.check"]
         scrollIntoView(check)
         check.click()
-        XCTAssertTrue(wait("label CONTAINS 'latest version'", on: status), "a manual check still works")
+        let checking = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Checking' OR value CONTAINS 'Checking'")).firstMatch
+        _ = checking.waitForExistence(timeout: 2)   // the fake answers after 0.2 s; this may already be over
+        XCTAssertTrue(latest.waitForExistence(timeout: timeout), "a manual check still works")
     }
 
     func testAvailableUpdateShowsABannerThatCanBeDismissed() {
