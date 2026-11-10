@@ -281,6 +281,70 @@ final class OpenWarpUITests: XCTestCase {
         assertPageTitle("Profile")
     }
 
+    /// Regression: switching tabs rebuilt every page, which reset its state (and reloaded it) on each visit.
+    func testPagesKeepTheirStateAcrossTabSwitches() {
+        launch()
+        open("Settings")
+        let advanced = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Advanced'")).firstMatch
+        XCTAssertTrue(advanced.waitForExistence(timeout: timeout))
+        scrollIntoView(advanced)
+        advanced.click()
+        // Static text keeps its string in the accessibility value on macOS.
+        let proxyPort = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Proxy port' OR value CONTAINS 'Proxy port'")).firstMatch
+        XCTAssertTrue(proxyPort.waitForExistence(timeout: timeout), "Advanced expanded")
+        open("Home")
+        XCTAssertTrue(cloud.waitForExistence(timeout: timeout))
+        XCTAssertFalse(proxyPort.exists, "hidden pages are hidden from assistive technology")
+        open("Settings")
+        XCTAssertTrue(proxyPort.waitForExistence(timeout: timeout), "Advanced is still expanded after switching back")
+        XCTAssertEqual(app.scrollViews.matching(identifier: "page.scroll").count, 1, "only the visible page is exposed")
+    }
+
+    // MARK: about and updates
+
+    func testAboutLinksToTheSourceCode() {
+        launch()
+        open("About")
+        let source = element("about.source")
+        XCTAssertTrue(source.waitForExistence(timeout: timeout), "the GitHub link is on About")
+        XCTAssertTrue(source.label.contains("Source code on GitHub") || app.staticTexts["Source code on GitHub"].exists)
+    }
+
+    func testUpdateCheckCanBeSwitchedOffAndRunByHand() {
+        launch()
+        open("Settings")
+        let toggle = app.checkBoxes["toggle.check_updates"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: timeout))
+        scrollIntoView(toggle)
+        XCTAssertEqual(isOn(toggle), true, "on by default")
+        let latest = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'latest version' OR value CONTAINS 'latest version'")).firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: timeout), "the launch check found no newer version")
+        toggle.click()
+        XCTAssertTrue(wait("value == 0", on: toggle))
+        let check = app.buttons["updates.check"]
+        scrollIntoView(check)
+        check.click()
+        let checking = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Checking' OR value CONTAINS 'Checking'")).firstMatch
+        _ = checking.waitForExistence(timeout: 2)   // the fake answers after 0.2 s; this may already be over
+        XCTAssertTrue(latest.waitForExistence(timeout: timeout), "a manual check still works")
+    }
+
+    func testAvailableUpdateShowsABannerThatCanBeDismissed() {
+        launch("update-available")
+        let banner = element("update.banner")
+        XCTAssertTrue(banner.waitForExistence(timeout: timeout), "the automatic check found 9.9.0")
+        XCTAssertTrue(text(element("update.banner.text")).contains("9.9.0"))
+        app.buttons["update.banner.dismiss"].click()
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: banner)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: timeout), .completed)
+        open("Settings")
+        let download = app.buttons["updates.download"]
+        XCTAssertTrue(download.waitForExistence(timeout: timeout), "Settings still offers the download")
+    }
+
     // MARK: settings
 
     func testTunnelProtocolSegmentSwitches() {

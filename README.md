@@ -1,15 +1,30 @@
-# OpenWarp
+<p align="center"><img src="assets/icon/icon.PNG" width="128" height="128" alt="OpenWarp icon"></p>
 
-OpenWarp is an independent, open-source macOS client for the Cloudflare WARP consumer network. It has three
-parts: a background daemon written in Go, a `warp-cli`-style command-line tool (`openwarp`), and a native
-SwiftUI app.
+<h1 align="center">OpenWarp</h1>
+
+<p align="center">An independent, open-source macOS client for the Cloudflare WARP network.</p>
+
+<p align="center"><a href="https://github.com/ImanMontajabi/OpenWarp/releases/latest"><b>Download for macOS</b></a> ·
+<a href="#install">Install</a> · <a href="#known-limitations">Limitations</a> · <a href="CHANGELOG.md">Changelog</a></p>
+
+OpenWarp has three parts: a background daemon written in Go, a `warp-cli`-style command-line tool
+(`openwarp`), and a native SwiftUI app with a menu bar dashboard.
 
 > **OpenWarp is not affiliated with, endorsed by or supported by Cloudflare, Inc.** "Cloudflare" and "WARP" are
 > trademarks of Cloudflare, Inc. and are used here only to describe compatibility. OpenWarp talks to Cloudflare's
 > public WARP service, so using it means accepting the
 > [Cloudflare WARP Terms of Service](https://www.cloudflare.com/application/terms/).
 
-**Status:** early MVP (`0.1.0`, unreleased). Expect rough edges; see [Known limitations](#known-limitations).
+**Status:** `0.1.0` is the first public MVP release. Expect rough edges; see
+[Known limitations](#known-limitations).
+
+<p align="center">
+  <img src="docs/screenshots/home.png" width="230" alt="Home: connected, with the seven connection modes">
+  <img src="docs/screenshots/menu-bar.png" width="230" alt="Menu bar dashboard: traffic and public IP">
+  <img src="docs/screenshots/settings.png" width="230" alt="Settings">
+</p>
+<p align="center"><sub>Rendered from the app's own views by its snapshot tests, with sample data (documentation
+IP addresses, no real account).</sub></p>
 
 ## Why
 
@@ -34,35 +49,60 @@ hostname-based split tunnelling.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later. The build targets both Apple silicon (arm64) and Intel (x86_64); only Apple
-  silicon has been tested so far.
-- Administrator rights for the full-device VPN modes (`warp`, `warp+doh`, `warp+dot`, `doh`, `dot`,
-  `tunnel_only`). `proxy` mode runs without root.
+- macOS 14 (Sonoma) or later.
+- Apple silicon or Intel: the app and the bundled CLI are universal (arm64 and x86_64). So far OpenWarp has been
+  tested on Apple silicon only; the Intel code is built and checked in CI but not tested on Intel hardware.
+- Administrator rights to install the background service, which the full-device VPN modes (`warp`, `warp+doh`,
+  `warp+dot`, `doh`, `dot`, `tunnel_only`) need. `proxy` mode runs without it.
 - To build from source: Go 1.27 and Xcode 27 (or its command-line tools).
 
-## Install and use
+## Install
 
-There is no signed or notarized download yet, so OpenWarp is built from source:
+1. Download `OpenWarp-v<version>-macos-universal.dmg` and `SHA256SUMS.txt` from the
+   [latest release](https://github.com/ImanMontajabi/OpenWarp/releases/latest), and check the download:
+   `shasum -a 256 -c SHA256SUMS.txt`.
+2. Open the DMG and drag **OpenWarp** into **Applications**.
+3. Open OpenWarp from Applications.
+4. OpenWarp is **not signed with an Apple Developer ID and not notarized** (the project has no Apple Developer
+   Program membership), so macOS may say it cannot verify the app. Open **System Settings → Privacy &
+   Security**, find the message about OpenWarp under Security, click **Open Anyway** and confirm. This is needed
+   once. The exact wording and steps vary between macOS versions, and Macs managed by an organisation may not
+   allow it at all. Do not turn off Gatekeeper to run OpenWarp.
+5. On first launch OpenWarp explains its background service and offers **Install Background Service**. macOS
+   asks for an administrator password in its own dialog (OpenWarp never sees it). The service is copied to
+   `/Library/PrivilegedHelperTools`, so it keeps working after you eject the DMG, and the app checks that it is
+   running before it continues.
+
+To uninstall: `sudo /Applications/OpenWarp.app/Contents/Resources/openwarp service uninstall`, then move the
+app to the Bin. Your registration and settings stay in `/Library/Application Support/openwarp`.
+
+## Use
+
+The app's Home page connects and disconnects (click the cloud) and selects one of the seven modes; Settings,
+Profile (registration, WARP+ license, devices) and the menu bar dashboard cover the rest. Everything is also
+available from Terminal:
+
+```sh
+openwarp registration new --accept-tos
+openwarp mode warp            # or warp+doh, warp+dot, doh, dot, proxy, tunnel_only
+openwarp connect
+openwarp status
+openwarp service status       # is the background service installed, running and up to date? (no root needed)
+```
+
+More commands: `openwarp help`.
+
+The registration (including its private keys and token) is stored in `state.json` with `0600` permissions in
+`/Library/Application Support/openwarp` (root daemon) or `~/Library/Application Support/openwarp` (user daemon).
+Never share that file.
+
+## Build from source
 
 ```sh
 git clone https://github.com/ImanMontajabi/OpenWarp.git
 cd OpenWarp
 ./build.sh                                  # runs the Go tests, then builds build/openwarp and build/OpenWarp.app
-```
-
-The easiest way is to open `build/OpenWarp.app` (move it to `/Applications` first) and click **Install
-Background Service**. macOS asks for an administrator password in its own dialog; OpenWarp never sees it. The app
-then checks that the service is running before it continues.
-
-From Terminal instead, install the daemon as a LaunchDaemon (runs as root), register, and connect:
-
-```sh
-sudo ./build/openwarp service install      # copies the daemon to /Library/PrivilegedHelperTools, links /usr/local/bin/openwarp
-openwarp service status                    # installed, loaded, running and up to date? (no root needed)
-openwarp registration new --accept-tos
-openwarp connect
-openwarp status
-open build/OpenWarp.app                     # the app drives the same daemon through the CLI
+scripts/make-dmg.sh build/OpenWarp.app dist/OpenWarp.dmg   # optional: the release DMG layout
 ```
 
 Without root, `proxy` mode exposes a local SOCKS5/HTTP proxy on `127.0.0.1:40000`:
@@ -73,12 +113,6 @@ Without root, `proxy` mode exposes a local SOCKS5/HTTP proxy on `127.0.0.1:40000
 ./build/openwarp mode proxy && ./build/openwarp connect
 curl -x socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace   # look for warp=on
 ```
-
-More commands: `openwarp help`. Remove the service with `sudo openwarp service uninstall`.
-
-The registration (including its private keys and token) is stored in `state.json` with `0600` permissions in
-`/Library/Application Support/openwarp` (root daemon) or `~/Library/Application Support/openwarp` (user daemon).
-Never share that file.
 
 ## How it works
 
@@ -126,22 +160,29 @@ in [SECURITY.md](SECURITY.md).
 
 ## Known limitations
 
-- Early MVP: verified live in `proxy` mode (registration, MASQUE and WireGuard) and by the author in `warp`
-  mode on one Apple silicon Mac. Other root modes, Intel Macs and older macOS versions are untested.
+- First MVP release: verified live in `proxy` mode (registration, MASQUE and WireGuard) and by the author in
+  `warp` mode on one Apple silicon Mac. Other root modes, Intel Macs and macOS versions before 26 are untested.
 - Full-device modes change routes and DNS with `route` and `networksetup` instead of Apple's Network Extension
   framework. If the daemon is killed while connected, the DNS settings may need to be restored by hand.
 - Trusted-network detection by SSID needs Location permission, which OpenWarp does not request yet; the
   Wi-Fi and Ethernet switches work without it.
+- Automatic update checks ask GitHub's API (`api.github.com`) for the latest release once a day while the app
+  runs. Turn them off in Settings → Updates. New versions are installed by hand from the release page.
 - The menu bar's public IP lookup sends a request to `www.cloudflare.com/cdn-cgi/trace` (at most every five
   minutes, and when the connection changes). Turn it off in Settings → Privacy. Cloudflare reports a country and
   data centre, not a city.
 - The in-app service installer uses an AppleScript administrator prompt, not `SMAppService`, because that needs a
   Developer ID–signed app. It trusts the app bundle it runs from, so install only from a copy you built or trust.
-- The builds are ad-hoc signed, not signed with a Developer ID or notarized, so Gatekeeper warns on first launch.
+- Releases are ad-hoc signed, not signed with a Developer ID or notarized, so Gatekeeper warns on first launch
+  (see [Install](#install)).
 - OpenWarp depends on Cloudflare's undocumented client API. Cloudflare can change it at any time, and whether
   WARP works on a given network depends on that network.
 
+## Security
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in public issues.
+
 ## License
 
-[MIT](LICENSE). Third-party Go modules keep their own licenses (MIT, BSD-3-Clause and Apache-2.0); see
-`go.mod` for the list.
+[MIT](LICENSE). Third-party Go modules keep their own licenses (MIT, BSD-3-Clause and Apache-2.0); their texts
+are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which also ships inside the app.

@@ -106,19 +106,33 @@ jobs:
           scripts/verify-app-bundle.sh build/OpenWarp.app arm64 x86_64
           lipo -archs build/openwarp
           codesign --verify --deep --strict build/OpenWarp.app && codesign -dv build/OpenWarp.app 2>&1 | grep -E 'Signature|Identifier'
-      - name: Package for testing (not a release)
+      # The DMG exactly as a release ships it (Finder window layout included), checked, then installed on
+      # this disposable runner: app to /Applications, launch and quit, service install as root, restart,
+      # upgrade, uninstall. Nothing registers with Cloudflare or connects, so routes and DNS are untouched.
+      - name: Package the DMG (for testing, not a release)
         run: |
           name="OpenWarp-${GITHUB_SHA::7}-macos-universal"
-          ditto -c -k --keepParent build/OpenWarp.app "$RUNNER_TEMP/$name.zip"
-          (cd "$RUNNER_TEMP" && shasum -a 256 "$name.zip" | tee "$name.zip.sha256")
+          scripts/make-dmg.sh build/OpenWarp.app "dist/$name.dmg"
+          ditto -c -k --keepParent build/OpenWarp.app "dist/$name.zip"
+          (cd dist && shasum -a 256 "$name.dmg" "$name.zip" | tee SHA256SUMS.txt)
           echo "NAME=$name" >> "$GITHUB_ENV"
+      - name: Verify the DMG
+        run: scripts/verify-dmg.sh "dist/$NAME.dmg" "$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)"
+      - name: Install test (disposable runner only)
+        run: scripts/ci-install-test.sh "dist/$NAME.dmg" "$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.NAME }}
           path: |
-            ${{ runner.temp }}/${{ env.NAME }}.zip
-            ${{ runner.temp }}/${{ env.NAME }}.zip.sha256
+            dist/${{ env.NAME }}.dmg
+            dist/${{ env.NAME }}.zip
+            dist/SHA256SUMS.txt
           retention-days: 7
+      - name: Diagnostics
+        if: failure()
+        run: |
+          sudo tail -n 80 /var/log/openwarp.log 2>/dev/null || true
+          find ~/Library/Logs/DiagnosticReports -name 'OpenWarp*' -print 2>/dev/null || true
 
   ui:
     name: macOS app (UI tests)

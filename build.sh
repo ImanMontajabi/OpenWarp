@@ -48,5 +48,9 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 </dict>
 </plist>
 EOF
-codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
+# Ad-hoc signatures (no Developer ID): the embedded CLI first, then the app that seals it. A failure stops
+# the build; macOS refuses to run unsigned arm64 code.
+codesign --force -s - "$APP/Contents/Resources/openwarp"
+codesign --force -s - "$APP"
+codesign --verify --deep --strict "$APP"
 echo "Built build/openwarp and $APP"
