@@ -89,8 +89,9 @@ private struct CloudFigure: View {
     var look: CloudLook
     var accent: RGB
     @Environment(\.owReduceMotion) private var reduce
+    @Environment(\.owPageActive) private var pageActive
 
-    private var animating: Bool { !reduce && (look == .connecting || look == .connected) }
+    private var animating: Bool { !reduce && pageActive && (look == .connecting || look == .connected) }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animating)) { ctx in

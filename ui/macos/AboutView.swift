@@ -4,9 +4,7 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(\.owTint) private var tint
-    private var version: String? {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-    }
+    @EnvironmentObject var updates: UpdateChecker
 
     var body: some View {
         Page(centered: true) {
@@ -25,6 +23,9 @@ struct AboutView: View {
             .padding(.bottom, Space.xs)
 
             CardSection {
+                LinkRow(icon: "chevron.left.forwardslash.chevron.right", title: "Source code on GitHub",
+                        subtitle: "github.com/ImanMontajabi/OpenWarp", url: AppInfo.repository.absoluteString)
+                    .accessibilityIdentifier("about.source")
                 Row(icon: "square.stack.3d.up", title: "Protocols", subtitle: "MASQUE (HTTP/3 CONNECT-IP) and WireGuard")
                 LinkRow(icon: "doc.text", title: "Cloudflare WARP Terms of Service",
                         url: "https://www.cloudflare.com/application/terms/")
@@ -34,7 +35,8 @@ struct AboutView: View {
 
             VStack(spacing: Space.xxs) {
                 Text("Not affiliated with or endorsed by Cloudflare.")
-                if let version { Text("Version \(version)") }
+                Text("Version \(updates.currentVersion)")
+                Text("MIT License · open source")
             }
             .font(Typo.caption).foregroundStyle(Palette.textTertiary)
             .frame(maxWidth: .infinity)
@@ -45,10 +47,11 @@ struct AboutView: View {
 private struct LinkRow: View {
     var icon: String
     var title: String
+    var subtitle: String? = nil
     var url: String
     var body: some View {
         Link(destination: URL(string: url)!) {
-            Row(icon: icon, title: title) {
+            Row(icon: icon, title: title, subtitle: subtitle) {
                 Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Palette.textTertiary)
             }

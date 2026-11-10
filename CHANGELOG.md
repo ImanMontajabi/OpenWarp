@@ -23,6 +23,10 @@ First public version, not yet released.
   update an outdated service and shows the Terminal commands as an alternative.
 - `openwarp service status` (no root needed): whether the service is installed, loaded, running and current.
 - Status reports the daemon version and per-connection traffic totals (`version`, `usage`).
+- Update checks: Settings → Updates can check GitHub once a day for a newer release (on by default, can be
+  switched off) and shows a banner with a link to the release page. Updates are never downloaded or installed
+  automatically. There is also a Check Now button.
+- About links to the source code on GitHub.
 - Registration as a macOS device (`type` macOS, `model` from `hw.model`).
 - LaunchDaemon installer (`openwarp service install|uninstall`) that also removes the pre-rename `cwarp` service.
   The service runs a root-owned copy in `/Library/PrivilegedHelperTools/com.local.openwarp`; the installer
