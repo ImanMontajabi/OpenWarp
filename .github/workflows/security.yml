@@ -65,7 +65,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # HEAD's full history: on a PR the merge result, on main and scheduled runs main itself. (Without
+      # --log-opts gitleaks reads every fetched ref, including unrelated branches.)
       - name: gitleaks
         run: |
           go install "github.com/zricethezav/gitleaks/v8@$GITLEAKS_VERSION"
-          "$(go env GOPATH)/bin/gitleaks" git --redact --no-banner --verbose .
+          "$(go env GOPATH)/bin/gitleaks" git --redact --no-banner --verbose --log-opts=HEAD .
