@@ -116,6 +116,7 @@ struct SettingsView: View {
                 .toggleStyle(PillToggleStyle())
                 .labelsHidden()
                 .accessibilityLabel(title)
+                .accessibilityIdentifier("toggle.\(key)")
         }
     }
 

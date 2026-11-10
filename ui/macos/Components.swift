@@ -20,6 +20,7 @@ struct Page<Content: View>: View {
                     if let title {
                         Text(title).font(Typo.pageTitle).foregroundStyle(Palette.text)
                             .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("page.title")
                     }
                     content
                 }
@@ -29,6 +30,7 @@ struct Page<Content: View>: View {
                 .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: centered ? .center : .top)
             }
             .scrollIndicators(.automatic)
+            .accessibilityIdentifier("page.scroll")
         }
     }
 }
@@ -304,6 +306,7 @@ struct Segmented<T: Hashable>: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
+                .accessibilityIdentifier("segment.\(value)")
             }
         }
         .padding(2)
@@ -360,7 +363,7 @@ struct ChoiceRow: View {
     var onSelect: (String) -> Void
     @State private var open = false
     @Environment(\.owTint) private var tint
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
 
     var body: some View {
         VStack(spacing: 0) {
@@ -378,6 +381,7 @@ struct ChoiceRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint(open ? "Collapse options" : "Show options")
+            .accessibilityIdentifier("choice.\(title)")
 
             Reveal(open: open) {
                 VStack(spacing: 2) {
@@ -398,6 +402,7 @@ struct ChoiceRow: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityAddTraits(on ? .isSelected : [])
+                        .accessibilityIdentifier("choice.option.\(value)")
                     }
                 }
                 .padding(.horizontal, Space.xs).padding(.bottom, Space.xs)
@@ -413,7 +418,7 @@ struct DisclosureSection<Content: View>: View {
     var title: String
     @ViewBuilder var content: Content
     @State private var open = false
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { Accordion.toggle($open, reduceMotion: reduce) } label: {
@@ -485,6 +490,7 @@ struct ToastBanner: View {
         .background(Palette.raised.mix(c, 0.10).color, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).strokeBorder(c.color.opacity(0.25)))
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(toast.kind == .error ? "toast.error" : "toast.success")
     }
 }
 

@@ -20,8 +20,10 @@ enum Tab: String, CaseIterable, Identifiable {
 
 struct RootView: View {
     @EnvironmentObject var store: Store
-    @State private var tab: Tab = .home
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @State private var tab: Tab
+    @Environment(\.owReduceMotion) private var reduce
+
+    init(initialTab: Tab = .home) { _tab = State(initialValue: initialTab) }
 
     private var tint: Tint { Tint(accent: ModeInfo.find(store.mode).accent, engaged: store.connected) }
 
@@ -126,7 +128,7 @@ private struct WindowConfigurator: NSViewRepresentable {
 struct BottomNav: View {
     @Binding var selection: Tab
     @Environment(\.owTint) private var tint
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
     @Namespace private var ns
 
     var body: some View {
@@ -155,6 +157,7 @@ struct BottomNav: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(t.rawValue)
+                .accessibilityIdentifier("tab.\(t.id.lowercased())")
                 .accessibilityAddTraits(on ? .isSelected : [])
                 .keyboardShortcut(KeyEquivalent(Character("\(Tab.allCases.firstIndex(of: t)! + 1)")), modifiers: .command)
             }
@@ -177,6 +180,7 @@ struct DaemonDownView: View {
                     .foregroundStyle(Palette.warning.color)
                 Text("The OpenWarp service is not running").font(.system(size: 17, weight: .semibold))
                     .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("daemon.down")
                 Text("Install it once with:").font(Typo.caption).foregroundStyle(Palette.textSecondary)
                 HStack(spacing: Space.xs) {
                     Text("sudo \(CLI.path) service install").font(Typo.mono).textSelection(.enabled)

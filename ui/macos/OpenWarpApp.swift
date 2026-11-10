@@ -22,7 +22,7 @@ struct MenuContent: View {
 
 @main
 struct OpenWarpApp: App {
-    @StateObject private var store = Store()
+    @StateObject private var store = Store.forLaunch()
     var body: some Scene {
         Window("OpenWarp", id: "main") {
             RootView().environmentObject(store)

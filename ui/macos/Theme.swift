@@ -125,6 +125,15 @@ enum Motion {
     static let standard = Animation.easeInOut(duration: 0.25)
     static let accent = Animation.easeInOut(duration: 0.35)
     static let spring = Animation.spring(response: 0.3, dampingFraction: 0.85)
+    /// Forces the Reduce Motion behaviour (set for UI-test launches so continuous
+    /// animations cannot make tests flaky).
+    nonisolated(unsafe) static var forceReduced = false
+}
+
+extension EnvironmentValues {
+    /// The system Reduce Motion setting, or `Motion.forceReduced`. Read this
+    /// instead of `accessibilityReduceMotion`.
+    var owReduceMotion: Bool { accessibilityReduceMotion || Motion.forceReduced }
 }
 
 extension View {
@@ -135,7 +144,7 @@ extension View {
 }
 
 private struct MotionModifier<V: Equatable>: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.owReduceMotion) private var reduce
     var animation: Animation
     var value: V
     func body(content: Content) -> some View {
