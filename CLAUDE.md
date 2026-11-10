@@ -73,14 +73,15 @@ App tests (`scripts/test-app.sh [ui|record]`):
     point releases). `macOS-27.0.1` matches the CI `xcode-27` image. Other versions skip; CI turns the skip into
     a warning. Re-record with `scripts/test-app.sh record` or the macOS workflow's `record_snapshots` input.
 - `ui/macos/UITests`: XCUITest. Launching with `OPENWARP_UITEST_SCENARIO` (`registered`, `unregistered`,
-  `connect-fails`, `daemon-down`, `install-fails`, `outdated`) makes `AppModels.forLaunch()` wire the Store,
+  `connect-fails`, `daemon-down`, `install-fails`, `outdated`, `update-available`) makes `AppModels.forLaunch()` wire the Store,
   `SetupModel` and `LocationModel` to one `FakeDaemon` (plus `FakeInstaller`, `FakeTrace`) and force Reduce Motion.
   `FakeDaemon.swift` is `#if DEBUG` only.
 - The Store takes a `Backend` (`CLIBackend` in the app). `act`/`set`/`toggle` return their `Task` so tests can
   await them. UI tests find controls by `accessibilityIdentifier`: `tab.<name>`, `cloud`, `mode.<id>`,
   `home.status`, `home.detail`, `page.title`, `page.scroll`, `segment.<value>`, `toggle.<key>`,
   `choice.<title>`, `choice.option.<value>`, `toast.error|success` (message `toast.text`), `onboarding.install|error|recheck|ready|note|manual`,
-  `banner.outdated|update`, `toggle.lookup_public_ip`, and in the menu bar panel `dash.status`, `dash.mode`,
+  `banner.outdated|update`, `toggle.lookup_public_ip`, `toggle.check_updates`, `updates.status|check|download`,
+  `update.banner|banner.text|banner.download|banner.dismiss`, `about.source`, and in the menu bar panel `dash.status`, `dash.mode`,
   `dash.connect`, `dash.source`, `dash.feedback`, `dash.upload|download.rate|total`, `dash.system`,
   `dash.location.system|proxy` (rows `value.Public IP` …), `dash.location.refresh|enable`, `dash.quit`, `dash.open`.
   The dashboard UI tests skip when the status item cannot be reached.
@@ -94,6 +95,8 @@ UI files:
   direct and via the SOCKS proxy). `Setup.swift`: `ServiceStatus`, `SetupModel`, `AdminInstaller` (osascript
   admin prompt running the bundled `openwarp service install`; success only after `service status` verifies).
 - `DashboardView.swift` (menu bar panel, 320 pt), `OnboardingView.swift` (first-run setup, `ServiceUpdateBanner`).
+- `Updates.swift`: `AppInfo` (repository URLs), `AppVersion`, `UpdateChecker` (GitHub `releases/latest`, daily while
+  running, opt-out, never downloads or installs), `AppUpdateBanner`. UI tests use `FakeReleases` (scenario `update-available`).
 - `Theme.swift`: palette, per-mode accents (`ModeInfo.all`), `Space`/`Radius`/`Metrics`/`Typo`/`Motion`, `Tint` env,
   `\.owReduceMotion` (system Reduce Motion or `Motion.forceReduced`; read this, not `accessibilityReduceMotion`).
 - `FakeDaemon.swift`: `UITestLaunch.models()` and the Debug-only in-process fake daemon, installer and trace for UI tests.
@@ -102,6 +105,9 @@ UI files:
   `Segmented`, `ChoiceRow`, `DisclosureSection`, `StatusBadge`, `ToastBanner`, `ListEditorSheet`, `CopyButton`.
 - `Cloud.swift`: `CloudShape`, `CloudButton` (connect/disconnect), connecting pulse and rain animation.
 - `Shell.swift`: `RootView`, `TitleArea`, `BottomNav` (⌘1–⌘5), `WindowConfigurator`; shows `OnboardingView` while the daemon is unreachable.
+  Pages are built on first visit and then kept alive in a `ZStack` (hidden ones: opacity 0, no hit testing,
+  `accessibilityHidden`, `\.owPageActive == false`). Never key pages with `.id(tab)`: that rebuilt and reloaded
+  them on every switch and reset their scroll and disclosure state.
 - `HomeView.swift`, `ConnectivityView.swift`, `SettingsView.swift`, `ProfileView.swift`, `AboutView.swift`.
 - `ui/macos/legacy-backup/CWarpApp.swift.orig`: the pre-redesign single-file UI (not compiled).
 

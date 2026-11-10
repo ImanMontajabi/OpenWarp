@@ -132,6 +132,8 @@ in [SECURITY.md](SECURITY.md).
   framework. If the daemon is killed while connected, the DNS settings may need to be restored by hand.
 - Trusted-network detection by SSID needs Location permission, which OpenWarp does not request yet; the
   Wi-Fi and Ethernet switches work without it.
+- Automatic update checks ask GitHub's API (`api.github.com`) for the latest release once a day while the app
+  runs. Turn them off in Settings → Updates. New versions are installed by hand from the release page.
 - The menu bar's public IP lookup sends a request to `www.cloudflare.com/cdn-cgi/trace` (at most every five
   minutes, and when the connection changes). Turn it off in Settings → Privacy. Cloudflare reports a country and
   data centre, not a city.

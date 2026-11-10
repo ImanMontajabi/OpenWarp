@@ -341,11 +341,12 @@ struct AppModels {
     var store: Store
     var setup: SetupModel
     var location: LocationModel
+    var updates: UpdateChecker
 
     static func forLaunch() -> AppModels {
         #if DEBUG
         if let models = UITestLaunch.models() { return models }
         #endif
-        return AppModels(store: Store(), setup: SetupModel(), location: LocationModel())
+        return AppModels(store: Store(), setup: SetupModel(), location: LocationModel(), updates: UpdateChecker())
     }
 }

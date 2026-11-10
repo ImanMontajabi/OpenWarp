@@ -22,9 +22,12 @@ enum UITestLaunch {
         let fake = FakeDaemon(scenario: scenario)
         let defaults = UserDefaults(suiteName: "local.openwarp.uitest")!
         defaults.removePersistentDomain(forName: "local.openwarp.uitest")
+        let newer = scenario == .updateAvailable ? "v9.9.0" : "v\(FakeDaemon.version)"
         return AppModels(store: Store(backend: fake),
                          setup: SetupModel(backend: fake, installer: FakeInstaller(daemon: fake)),
-                         location: LocationModel(fetcher: FakeTrace(daemon: fake), defaults: defaults))
+                         location: LocationModel(fetcher: FakeTrace(daemon: fake), defaults: defaults),
+                         updates: UpdateChecker(fetcher: FakeReleases(tag: newer), defaults: defaults,
+                                                currentVersion: FakeDaemon.version))
     }
 }
 
@@ -39,6 +42,16 @@ struct FakeInstaller: ServiceInstaller {
     }
 }
 
+/// GitHub's latest release, without the network.
+struct FakeReleases: ReleaseFetcher {
+    let tag: String
+    func latest() async throws -> ReleaseInfo? {
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        return ReleaseInfo(tag_name: tag, html_url: "https://github.com/ImanMontajabi/OpenWarp/releases/tag/\(tag)",
+                           draft: false, prerelease: false)
+    }
+}
+
 /// Cloudflare trace answers that follow the fake daemon's connection state.
 struct FakeTrace: TraceFetcher {
     let daemon: FakeDaemon
@@ -50,6 +63,7 @@ actor FakeDaemon: Backend {
         case registered, unregistered, connectFails = "connect-fails", daemonDown = "daemon-down"
         case installFails = "install-fails"   // daemon down, and installing fails
         case outdated                         // an older service is running
+        case updateAvailable = "update-available"   // GitHub has a newer release
     }
 
     /// The version the fake daemon reports once "installed" (the app's own).
