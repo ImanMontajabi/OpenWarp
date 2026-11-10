@@ -28,6 +28,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/ImanMontajabi/OpenWarp/internal/api"
+	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
@@ -49,6 +50,29 @@ func mockEdge(t *testing.T) (netip.AddrPort, string) {
 		fmt.Fprint(w, "hello from the edge")
 	}))
 
+	// One reader for internet -> client, sending to the current CONNECT-IP stream. (A reader per stream
+	// would outlive its stream after a reconnect and swallow packets meant for the new one.)
+	type datagramSender interface{ SendDatagram([]byte) error }
+	var curMu sync.Mutex
+	var cur datagramSender
+	go func() {
+		bufs, sizes := [][]byte{make([]byte, 65535)}, []int{0}
+		for {
+			n, err := inetTun.Read(bufs, sizes, 1)
+			if err != nil {
+				return
+			}
+			curMu.Lock()
+			str := cur
+			curMu.Unlock()
+			if n == 1 && str != nil {
+				b := bufs[0][:1+sizes[0]]
+				b[0] = 0
+				str.SendDatagram(append([]byte(nil), b...))
+			}
+		}
+	}()
+
 	srv := &http3.Server{
 		EnableDatagrams:    true,
 		AdditionalSettings: map[uint64]uint64{0x276: 1},
@@ -64,20 +88,9 @@ func mockEdge(t *testing.T) (netip.AddrPort, string) {
 			w.WriteHeader(200)
 			w.(http.Flusher).Flush()
 			str, _ := w.(http3.HTTPStreamer).HTTPStream()
-			go func() { // internet -> client
-				bufs, sizes := [][]byte{make([]byte, 65535)}, []int{0}
-				for {
-					n, err := inetTun.Read(bufs, sizes, 1)
-					if err != nil {
-						return
-					}
-					if n == 1 {
-						b := bufs[0][:1+sizes[0]]
-						b[0] = 0
-						str.SendDatagram(append([]byte(nil), b...))
-					}
-				}
-			}()
+			curMu.Lock()
+			cur = str
+			curMu.Unlock()
 			for { // client -> internet
 				d, err := str.ReceiveDatagram(r.Context())
 				if err != nil {
@@ -285,9 +298,54 @@ func TestEndToEndProxyModeOverMasque(t *testing.T) {
 		t.Fatalf("stats missing: %s", body)
 	}
 	t.Logf("status: %s", body)
+	if st.Version != buildinfo.Version {
+		t.Fatalf("status reports version %q, want %q", st.Version, buildinfo.Version)
+	}
+	// Usage covers the whole connection: equal to the transport's counters so far...
+	if st.Usage == nil || st.Usage.RxBytes != st.Tunnel.RxBytes || st.Usage.TxBytes != st.Tunnel.TxBytes || st.Usage.Since.IsZero() {
+		t.Fatalf("usage should match the first transport: %s", body)
+	}
+	before := *st.Usage
+
+	// ...and keeps counting across a reconnect, while the new transport's counters restart.
+	eng.reconnect()
+	waitConnected := func() {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			_, body = do("GET", "/v1/status", "")
+			st = Status{}
+			json.Unmarshal([]byte(body), &st)
+			if st.Status == StatusConnected && st.Tunnel != nil {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatalf("not connected again: %s", body)
+	}
+	waitConnected()
+	pu, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", port))
+	hc := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
+	resp, err := hc.Get("http://10.9.0.1/")
+	if err != nil {
+		t.Fatalf("proxy after reconnect: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	_, body = do("GET", "/v1/status", "")
+	json.Unmarshal([]byte(body), &st)
+	// At least: packets can still reach the old transport (TCP teardown) between the snapshot and the reconnect.
+	if st.Usage == nil || st.Usage.RxBytes < before.RxBytes+st.Tunnel.RxBytes || st.Usage.TxBytes < before.TxBytes+st.Tunnel.TxBytes ||
+		!st.Usage.Since.Equal(before.Since) {
+		t.Fatalf("usage after reconnect = %+v, want at least %d + %d since %v", st.Usage, before.RxBytes, st.Tunnel.RxBytes, before.Since)
+	}
+	if st.Tunnel.RxBytes >= st.Usage.RxBytes {
+		t.Fatalf("the new transport's counters should have restarted: tunnel %d, usage %d", st.Tunnel.RxBytes, st.Usage.RxBytes)
+	}
 
 	do("POST", "/v1/disconnect", "")
 	_, body = do("GET", "/v1/status", "")
+	st = Status{}
 	json.Unmarshal([]byte(body), &st)
 	if st.Status != StatusDisconnected {
 		t.Fatalf("after disconnect: %s", body)
@@ -295,5 +353,15 @@ func TestEndToEndProxyModeOverMasque(t *testing.T) {
 	if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond); err == nil {
 		c.Close()
 		t.Fatal("proxy still listening after disconnect")
+	}
+	if st.Usage != nil {
+		t.Fatalf("usage reported while disconnected: %s", body)
+	}
+
+	// A new connection starts counting from zero.
+	do("POST", "/v1/connect", "")
+	waitConnected()
+	if st.Usage == nil || st.Usage.RxBytes > st.Tunnel.RxBytes || !st.Usage.Since.After(before.Since) {
+		t.Fatalf("usage not reset for a new connection: %s", body)
 	}
 }

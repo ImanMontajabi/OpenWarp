@@ -18,6 +18,13 @@ struct TunnelStats: Decodable {
 
 struct DNSStats: Decodable { var queries: UInt64; var fallback_queries: UInt64; var failures: UInt64 }
 
+/// Traffic of the current connection, summed over reconnects (engine.go Usage).
+struct Usage: Decodable, Equatable {
+    var tx_bytes: UInt64
+    var rx_bytes: UInt64
+    var since: String
+}
+
 struct Status: Decodable {
     var status: String
     var reason: String?
@@ -36,6 +43,8 @@ struct Status: Decodable {
     var tunnel: TunnelStats?
     var dns: DNSStats?
     var network: String?
+    var version: String?   // absent from daemons older than 0.1.0
+    var usage: Usage?
 }
 
 struct Settings: Decodable {
@@ -145,6 +154,17 @@ enum CLI {
 
 // MARK: - Store
 
+enum PendingAction: String { case connect, disconnect }
+
+/// What a connect/disconnect control shows.
+enum ButtonState: Equatable {
+    case loading, unavailable, unregistered, disconnected, connecting, connected, disconnecting, retrying, paused
+
+    /// Clicking disconnects (or stops the attempt) in these states.
+    var stops: Bool { [.connecting, .connected, .retrying, .paused].contains(self) }
+    var enabled: Bool { ![.loading, .disconnecting, .unregistered].contains(self) }
+}
+
 struct Toast: Equatable, Identifiable {
     enum Kind { case error, success }
     let id = UUID()
@@ -162,6 +182,15 @@ final class Store: ObservableObject {
     @Published var daemonError: String?
     @Published var toast: Toast?
     @Published var busy = false
+    /// The connect or disconnect the user just asked for, until the daemon has answered.
+    @Published private(set) var pendingAction: PendingAction?
+    /// Live throughput: through the tunnel (daemon counters) and over all interfaces.
+    @Published private(set) var tunnelRates: Rates?
+    @Published private(set) var systemRates: Rates?
+    private var tunnelMeter = CounterMeter()
+    private var systemMeter = SystemMeter()
+    private let interfaceCounters: () -> [InterfaceCounters]
+    private let clock: () -> Date
     /// Values the user just chose, shown until the daemon confirms them, so
     /// controls don't snap back while the CLI round-trip is in flight.
     @Published private(set) var pending: [String: String] = [:]
@@ -170,8 +199,11 @@ final class Store: ObservableObject {
     private var tick = 0
 
     /// `polling: false` (tests) skips the timer and the initial refresh.
-    init(backend: Backend = CLIBackend(), polling: Bool = true) {
+    init(backend: Backend = CLIBackend(), polling: Bool = true,
+         interfaceCounters: @escaping () -> [InterfaceCounters] = SystemMeter.read, clock: @escaping () -> Date = Date.init) {
         self.backend = backend
+        self.interfaceCounters = interfaceCounters
+        self.clock = clock
         guard polling else { return }
         // Status every 1.5s; settings/registration every ~6s so changes made
         // from the CLI show up too.
@@ -198,9 +230,30 @@ final class Store: ObservableObject {
 
     func refreshStatus() async {
         let (d, err) = await backend.run(["status"])
-        if let err { daemonError = err; status = nil; return }
+        let now = clock()
+        systemRates = systemMeter.update(interfaceCounters(), at: now)
+        if let err { daemonError = err; status = nil; tunnelRates = nil; tunnelMeter.reset(); return }
         daemonError = nil
         status = try? JSONDecoder().decode(Status.self, from: d)
+        updateTunnelRates(at: now)
+    }
+
+    /// Feeds the meters from the current `status` (snapshot tests set the status directly).
+    func recordSampleForTesting() {
+        let now = clock()
+        systemRates = systemMeter.update(interfaceCounters(), at: now)
+        updateTunnelRates(at: now)
+    }
+
+    /// The tunnel rate follows the connection's usage counters. A new connection
+    /// (different `since`) or a daemon restart (counters going down) starts over.
+    private func updateTunnelRates(at now: Date) {
+        guard let u = status?.usage, status?.status == "Connected" else {
+            tunnelRates = nil
+            tunnelMeter.reset()
+            return
+        }
+        tunnelRates = tunnelMeter.update(tx: u.tx_bytes, rx: u.rx_bytes, at: now, epoch: u.since)
     }
 
     func refreshAll() async {
@@ -245,7 +298,54 @@ final class Store: ObservableObject {
     }
 
     @discardableResult
-    func toggle() -> Task<Void, Never> { act([wantsOn ? "disconnect" : "connect"]) }
+    func toggle() -> Task<Void, Never> {
+        let action: PendingAction = wantsOn ? .disconnect : .connect
+        pendingAction = action
+        let task = act([action.rawValue])
+        return Task {
+            await task.value
+            if pendingAction == action { pendingAction = nil }
+        }
+    }
+
+    /// The state both connect controls (the cloud and the menu bar button) show.
+    var buttonState: ButtonState {
+        if daemonError != nil { return .unavailable }
+        if status == nil { return .loading }
+        if !registered { return .unregistered }
+        switch pendingAction {
+        case .disconnect: return .disconnecting
+        case .connect where connState == .disconnected || connState == .unknown: return .connecting
+        default: break
+        }
+        switch connState {
+        case .connected: return .connected
+        case .connecting: return .connecting
+        case .retrying: return .retrying
+        case .paused: return .paused
+        case .disconnected: return wantsOn ? .connecting : .disconnected
+        case .unknown: return .loading
+        }
+    }
+
 
     func show(_ kind: Toast.Kind, _ text: String) { toast = Toast(kind: kind, text: text) }
+}
+
+// MARK: - Launch
+
+/// The app's shared models: one Store (and one daemon poller) for the main
+/// window and the menu bar.
+@MainActor
+struct AppModels {
+    var store: Store
+    var setup: SetupModel
+    var location: LocationModel
+
+    static func forLaunch() -> AppModels {
+        #if DEBUG
+        if let models = UITestLaunch.models() { return models }
+        #endif
+        return AppModels(store: Store(), setup: SetupModel(), location: LocationModel())
+    }
 }

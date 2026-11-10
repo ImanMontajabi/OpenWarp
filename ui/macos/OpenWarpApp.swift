@@ -1,39 +1,55 @@
 // OpenWarp — SwiftUI front end for the openwarp daemon.
 // It talks to the daemon through the bundled `openwarp` CLI with JSON output
-// (see Models.swift). Pages: Home / Connectivity / Settings / Profile / About.
+// (see Models.swift). Pages: Home / Connectivity / Settings / Profile / About,
+// plus the menu bar dashboard (DashboardView) on the same Store.
 
 import SwiftUI
 import AppKit
 
-struct MenuContent: View {
-    @EnvironmentObject var store: Store
-    @Environment(\.openWindow) var openWindow
-    var body: some View {
-        Text("OpenWarp: \(store.status?.status ?? (store.daemonError != nil ? "service not running" : "…"))")
-        if let t = store.status?.tunnel { Text("\(t.protocol) · \(t.endpoint)") }
-        Text("Mode: \(ModeInfo.find(store.mode).fullName)")
-        Divider()
-        Button(store.wantsOn ? "Disconnect" : "Connect") { store.toggle() }.disabled(store.status?.registered != true)
-        Button("Open OpenWarp…") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-        Divider()
-        Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
-    }
-}
-
 @main
 struct OpenWarpApp: App {
-    @StateObject private var store = Store.forLaunch()
+    @StateObject private var store: Store
+    @StateObject private var setup: SetupModel
+    @StateObject private var location: LocationModel
+
+    init() {
+        let m = AppModels.forLaunch()
+        _store = StateObject(wrappedValue: m.store)
+        _setup = StateObject(wrappedValue: m.setup)
+        _location = StateObject(wrappedValue: m.location)
+    }
+
     var body: some Scene {
         Window("OpenWarp", id: "main") {
-            RootView().environmentObject(store)
+            RootView()
+                .environmentObject(store)
+                .environmentObject(setup)
+                .environmentObject(location)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultSize(width: Metrics.windowWidth, height: Metrics.windowHeight)
+
         MenuBarExtra {
-            MenuContent().environmentObject(store)
+            MenuBarDashboard()
+                .environmentObject(store)
+                .environmentObject(setup)
+                .environmentObject(location)
         } label: {
             Image(systemName: store.connected ? "cloud.fill" : "cloud")
+                .accessibilityLabel("OpenWarp")
         }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+/// The dashboard with its window actions bound to this scene.
+private struct MenuBarDashboard: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        DashboardView(openMain: {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        })
     }
 }

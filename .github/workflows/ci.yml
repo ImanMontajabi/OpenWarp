@@ -104,10 +104,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # macOS is the product; Linux and Windows must keep compiling so the stubs stay in sync.
+      # macOS (both architectures of the universal binary) is the product. linux/amd64 only keeps the non-darwin
+      # stubs compiling, because the Linux CI jobs vet and test them. Windows is not a target.
       - name: Cross-compile openwarp
         run: |
-          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+          for target in darwin/arm64 darwin/amd64 linux/amd64; do
             echo "building $target"
             GOOS="${target%/*}" GOARCH="${target#*/}" go build -trimpath -o /dev/null ./cmd/openwarp
           done

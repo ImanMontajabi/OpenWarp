@@ -8,30 +8,52 @@
 import Foundation
 import SwiftUI
 
-extension Store {
-    /// The Store the app starts with: the real CLI, or the fake for UI tests.
-    static func forLaunch() -> Store {
-        #if DEBUG
-        if let scenario = UITestLaunch.scenario {
-            Motion.forceReduced = true
-            return Store(backend: FakeDaemon(scenario: scenario))
-        }
-        #endif
-        return Store()
-    }
-}
-
 #if DEBUG
 enum UITestLaunch {
     static var scenario: FakeDaemon.Scenario? {
         ProcessInfo.processInfo.environment["OPENWARP_UITEST_SCENARIO"].flatMap(FakeDaemon.Scenario.init(rawValue:))
     }
+
+    /// Models wired to one in-process fake daemon (with a fake installer and a
+    /// fake Cloudflare trace), or nil for a normal launch.
+    @MainActor static func models() -> AppModels? {
+        guard let scenario else { return nil }
+        Motion.forceReduced = true
+        let fake = FakeDaemon(scenario: scenario)
+        let defaults = UserDefaults(suiteName: "local.openwarp.uitest")!
+        defaults.removePersistentDomain(forName: "local.openwarp.uitest")
+        return AppModels(store: Store(backend: fake),
+                         setup: SetupModel(backend: fake, installer: FakeInstaller(daemon: fake)),
+                         location: LocationModel(fetcher: FakeTrace(daemon: fake), defaults: defaults))
+    }
+}
+
+/// "Installs" the service: the fake daemon comes up, unless the scenario makes it fail.
+struct FakeInstaller: ServiceInstaller {
+    let daemon: FakeDaemon
+    func install() async -> InstallResult {
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        if daemon.scenario == .installFails { return .failed("launchctl bootstrap: 5: Input/output error") }
+        await daemon.installService()
+        return .installed
+    }
+}
+
+/// Cloudflare trace answers that follow the fake daemon's connection state.
+struct FakeTrace: TraceFetcher {
+    let daemon: FakeDaemon
+    func trace(socks: String?) async throws -> String { await daemon.trace(socks: socks) }
 }
 
 actor FakeDaemon: Backend {
     enum Scenario: String {
         case registered, unregistered, connectFails = "connect-fails", daemonDown = "daemon-down"
+        case installFails = "install-fails"   // daemon down, and installing fails
+        case outdated                         // an older service is running
     }
+
+    /// The version the fake daemon reports once "installed" (the app's own).
+    static let version = "0.1.0"
 
     static let modeLabels: [String: String] = [
         "warp": "Traffic and DNS (UDP)", "warp+doh": "Traffic and DNS (HTTPS)", "warp+dot": "Traffic and DNS (TLS)",
@@ -64,15 +86,29 @@ actor FakeDaemon: Backend {
     /// Disconnected, Connecting or Connected. Connecting lasts one status poll.
     private var conn = "Disconnected"
     private var reason: String?
+    /// Whether the service is installed and running, and which version it runs.
+    private var up: Bool
+    private var runningVersion: String?
+    /// Traffic of the current connection; grows on every status poll while connected.
+    private var usageTx: UInt64 = 0, usageRx: UInt64 = 0
+    private var usageSince = "2026-01-02T03:04:05Z"
 
     init(scenario: Scenario) {
         self.scenario = scenario
         registered = scenario != .unregistered
+        up = scenario != .daemonDown && scenario != .installFails
+        runningVersion = scenario == .outdated ? nil : Self.version
+    }
+
+    func installService() {
+        up = true
+        runningVersion = Self.version
     }
 
     func run(_ args: [String]) async -> (Data, String?) {
         calls.append(args)
-        if scenario == .daemonDown {
+        if args == ["service", "status"] { return ok(serviceStatus()) }   // works without the daemon
+        if !up {
             return fail("cannot reach the openwarp daemon at /var/run/openwarp.sock (start it with `sudo openwarp daemon` or `openwarp service install`): connection refused")
         }
         switch args {
@@ -86,6 +122,7 @@ actor FakeDaemon: Backend {
         case ["registration", "delete"]: registered = false; conn = "Disconnected"; return done()
         case ["connect"]:
             guard registered else { return fail("not registered: run `openwarp registration new`") }
+            if conn == "Disconnected" { usageTx = 0; usageRx = 0; usageSince = "2026-01-02T03:04:\(10 + calls.count % 50)Z" }
             conn = "Connecting"; reason = nil; settings["always_on"] = true
             return done()
         case ["disconnect"]:
@@ -169,6 +206,7 @@ actor FakeDaemon: Backend {
             "dns_protocol": mode.hasSuffix("doh") ? "doh" : mode.hasSuffix("dot") ? "dot" : "udp",
             "network": "Wi-Fi",
         ]
+        if let runningVersion { s["version"] = runningVersion }
         if registered { s["account_type"] = "free" }
         if let reason { s["reason"] = reason }
         switch conn {
@@ -188,9 +226,31 @@ actor FakeDaemon: Backend {
                            "tx_bytes": 123456, "rx_bytes": 654321, "tx_packets": 100, "rx_packets": 200,
                            "handshake_rtt": "42ms", "tls": "TLS 1.3"] as [String: Any]
             s["dns"] = ["queries": 10, "fallback_queries": 2, "failures": 0]
+            usageTx += 48_000; usageRx += 1_350_000   // roughly 32 KB/s up, 900 KB/s down at the app's 1.5 s poll
+            s["usage"] = ["tx_bytes": usageTx, "rx_bytes": usageRx, "since": usageSince] as [String: Any]
         default: break
         }
         return s
+    }
+
+    /// Matches `openwarp -j service status`.
+    private func serviceStatus() -> [String: Any] {
+        var s: [String: Any] = ["installed": up, "loaded": up, "running": up, "app_version": Self.version,
+                                "up_to_date": up && runningVersion == Self.version, "socket": "/var/run/openwarp.sock"]
+        if up {
+            s["program"] = runningVersion == Self.version ? "/Library/PrivilegedHelperTools/com.local.openwarp" : "/usr/local/bin/openwarp"
+            if let runningVersion { s["version"] = runningVersion }
+        } else {
+            s["error"] = "cannot reach the openwarp daemon at /var/run/openwarp.sock: connection refused"
+        }
+        return s
+    }
+
+    /// What Cloudflare's trace would report on the current route (documentation addresses).
+    func trace(socks: String?) -> String {
+        let mode = settings["mode"] as? String ?? "warp"
+        let viaWARP = socks != nil || (conn == "Connected" && mode != "proxy" && mode != "doh" && mode != "dot")
+        return viaWARP ? "ip=198.51.100.7\ncolo=FRA\nloc=DE\nwarp=on\n" : "ip=203.0.113.10\ncolo=AMS\nloc=NL\nwarp=off\n"
     }
 
     private func registration() -> [String: Any] {

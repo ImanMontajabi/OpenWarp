@@ -9,5 +9,11 @@
   "account_type": "unlimited",
   "warp_plus": true,
   "dns_protocol": "none",
-  "network": "Ethernet"
+  "network": "Ethernet",
+  "version": "0.1.0",
+  "usage": {
+    "tx_bytes": 2048,
+    "rx_bytes": 4096,
+    "since": "2026-01-02T03:04:05Z"
+  }
 }

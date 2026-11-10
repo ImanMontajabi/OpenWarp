@@ -21,11 +21,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
-const version = "0.1.0"
+const version = buildinfo.Version
 
 var jsonOut bool
 
@@ -35,7 +36,7 @@ Usage: openwarp [-j] <command> [args]
 
 Service:
   daemon [--state DIR] [--socket PATH]  Run the service (root for tun modes)
-  service install|uninstall             Install/remove the LaunchDaemon (sudo)
+  service install|uninstall|status      Install/remove the LaunchDaemon (sudo), or check it
 
 Connection:
   status [-l]                           Connection status (-l: keep watching)
@@ -183,7 +184,7 @@ func run(args []string) error {
 	case "daemon":
 		return runDaemon(rest)
 	case "service":
-		need(rest, 1, "install|uninstall")
+		need(rest, 1, "install|uninstall|status")
 		return service(rest[0])
 	case "status":
 		return status(slices.Contains(rest, "-l") || slices.Contains(rest, "--listen"))

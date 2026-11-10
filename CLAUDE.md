@@ -43,8 +43,10 @@ go build -o build/openwarp ./cmd/openwarp
 ./build/openwarp mode proxy && ./build/openwarp connect
 curl -x socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace   # expect warp=on
 
-# Full VPN (root): LaunchDaemon com.local.openwarp, binary /usr/local/bin/openwarp, log /var/log/openwarp.log
+# Full VPN (root): LaunchDaemon com.local.openwarp runs /Library/PrivilegedHelperTools/com.local.openwarp
+# (root-owned copy; /usr/local/bin/openwarp is a symlink), log /var/log/openwarp.log
 sudo ./build/openwarp service install
+./build/openwarp -j service status   # no root: installed/loaded/running/version/up_to_date
 ```
 
 The Swift app (branded **OpenWarp** in the UI) is compiled two ways:
@@ -66,23 +68,35 @@ App tests (`scripts/test-app.sh [ui|record]`):
     point releases). `macOS-27.0.1` matches the CI `xcode-27` image. Other versions skip; CI turns the skip into
     a warning. Re-record with `scripts/test-app.sh record` or the macOS workflow's `record_snapshots` input.
 - `ui/macos/UITests`: XCUITest. Launching with `OPENWARP_UITEST_SCENARIO` (`registered`, `unregistered`,
-  `connect-fails`, `daemon-down`) makes `Store.forLaunch()` use `FakeDaemon` and force Reduce Motion.
+  `connect-fails`, `daemon-down`, `install-fails`, `outdated`) makes `AppModels.forLaunch()` wire the Store,
+  `SetupModel` and `LocationModel` to one `FakeDaemon` (plus `FakeInstaller`, `FakeTrace`) and force Reduce Motion.
   `FakeDaemon.swift` is `#if DEBUG` only.
 - The Store takes a `Backend` (`CLIBackend` in the app). `act`/`set`/`toggle` return their `Task` so tests can
   await them. UI tests find controls by `accessibilityIdentifier`: `tab.<name>`, `cloud`, `mode.<id>`,
   `home.status`, `home.detail`, `page.title`, `page.scroll`, `segment.<value>`, `toggle.<key>`,
-  `choice.<title>`, `choice.option.<value>`, `toast.error|success` (message `toast.text`), `daemon.down`.
+  `choice.<title>`, `choice.option.<value>`, `toast.error|success` (message `toast.text`), `onboarding.install|error|recheck|ready|note|manual`,
+  `banner.outdated|update`, `toggle.lookup_public_ip`, and in the menu bar panel `dash.status`, `dash.mode`,
+  `dash.connect`, `dash.source`, `dash.feedback`, `dash.upload|download.rate|total`, `dash.system`,
+  `dash.location.system|proxy` (rows `value.Public IP` …), `dash.location.refresh|enable`, `dash.quit`, `dash.open`.
+  The dashboard UI tests skip when the status item cannot be reached.
 
 UI files:
-- `OpenWarpApp.swift`: `@main` scene (hidden title bar, portrait window 380×760, max width 460) + `MenuBarExtra`.
-- `Models.swift`: JSON models, `CLI.run`, `Store` (polling, `act`, optimistic `set(key,value,args)`).
+- `OpenWarpApp.swift`: `@main` scene (hidden title bar, portrait window 380×760, max width 460) + `MenuBarExtra` (`.window` style) showing `DashboardView`.
+- `Models.swift`: JSON models, `CLI.run`, `Store` (polling, `act`, optimistic `set(key,value,args)`, tunnel and
+  system rates, `ButtonState`), `AppModels.forLaunch()`.
+- `Telemetry.swift`: `ByteFormat`, `CounterMeter` (daemon usage → rates), `SystemMeter` (getifaddrs, wrap-safe),
+  `TrafficSource`. `NetworkLocation.swift`: Cloudflare trace parsing and `LocationModel` (opt-out, 5 min TTL,
+  direct and via the SOCKS proxy). `Setup.swift`: `ServiceStatus`, `SetupModel`, `AdminInstaller` (osascript
+  admin prompt running the bundled `openwarp service install`; success only after `service status` verifies).
+- `DashboardView.swift` (menu bar panel, 320 pt), `OnboardingView.swift` (first-run setup, `ServiceUpdateBanner`).
 - `Theme.swift`: palette, per-mode accents (`ModeInfo.all`), `Space`/`Radius`/`Metrics`/`Typo`/`Motion`, `Tint` env,
   `\.owReduceMotion` (system Reduce Motion or `Motion.forceReduced`; read this, not `accessibilityReduceMotion`).
-- `FakeDaemon.swift`: `Store.forLaunch()` and the Debug-only in-process fake daemon for UI tests.
+- `FakeDaemon.swift`: `UITestLaunch.models()` and the Debug-only in-process fake daemon, installer and trace for UI tests.
+  `FakeDaemon.version` must equal `internal/buildinfo` (checked by `scripts/check-repo.sh`).
 - `Components.swift`: `Page`, `CardSection`, `Card`, `Row`, `ValueRow`, `FlatButtonStyle`, `PillToggleStyle`, `Reveal`/`Accordion`,
   `Segmented`, `ChoiceRow`, `DisclosureSection`, `StatusBadge`, `ToastBanner`, `ListEditorSheet`, `CopyButton`.
 - `Cloud.swift`: `CloudShape`, `CloudButton` (connect/disconnect), connecting pulse and rain animation.
-- `Shell.swift`: `RootView`, `TitleArea`, `BottomNav` (⌘1–⌘5), `WindowConfigurator`, `DaemonDownView`.
+- `Shell.swift`: `RootView`, `TitleArea`, `BottomNav` (⌘1–⌘5), `WindowConfigurator`; shows `OnboardingView` while the daemon is unreachable.
 - `HomeView.swift`, `ConnectivityView.swift`, `SettingsView.swift`, `ProfileView.swift`, `AboutView.swift`.
 - `ui/macos/legacy-backup/CWarpApp.swift.orig`: the pre-redesign single-file UI (not compiled).
 
@@ -175,7 +189,9 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 - `warp` / `warp+doh` / `warp+dot` / `tunnel_only` modes: utun address setup, split routes, endpoint host
   route, `networksetup` DNS change and restore (`internal/sysnet/sysnet_darwin.go`).
 - DNS-only modes `doh` / `dot`: the local stub resolver binds `127.0.0.1:53`.
-- `service install` / `uninstall`.
+- `service install` / `uninstall`, including the in-app installer (`AdminInstaller`: osascript administrator
+  prompt) and the `/Library/PrivilegedHelperTools` helper path. Unit-tested only (`service_test.go`, `SetupTests`,
+  UI tests with `FakeInstaller`).
 - Trusted SSID pause: macOS returns `<redacted>` for the SSID without Location permission, so only the
   Wi-Fi/ethernet toggles work reliably.
 

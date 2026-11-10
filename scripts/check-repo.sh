@@ -13,10 +13,13 @@ for f in README.md LICENSE CONTRIBUTING.md SECURITY.md CHANGELOG.md \
 done
 
 # One version everywhere: the CLI and the app bundle.
-cli=$(sed -n 's/^const version = "\(.*\)"$/\1/p' cmd/openwarp/main.go)
+cli=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go)
 app=$(sed -n 's/.*<key>CFBundleShortVersionString<\/key><string>\(.*\)<\/string>.*/\1/p' build.sh)
-[ -n "$cli" ] || err "cannot read the CLI version from cmd/openwarp/main.go"
+[ -n "$cli" ] || err "cannot read the version from internal/buildinfo/buildinfo.go"
 [ "$cli" = "$app" ] || err "version mismatch: CLI $cli, app bundle (build.sh) $app"
+# The UI tests' fake daemon reports the app's version once "installed".
+fake=$(sed -n 's/^ *static let version = "\(.*\)"$/\1/p' ui/macos/FakeDaemon.swift)
+[ "$cli" = "$fake" ] || err "version mismatch: CLI $cli, FakeDaemon.version $fake"
 grep -q "^## \[Unreleased\]" CHANGELOG.md || err "CHANGELOG.md has no [Unreleased] section"
 
 # JSON contract fixtures shared by the Go and Swift tests must be valid JSON.

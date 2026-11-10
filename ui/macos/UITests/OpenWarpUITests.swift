@@ -148,13 +148,97 @@ final class OpenWarpUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter().wait(for: [enabled], timeout: timeout), .completed)
     }
 
-    func testDaemonDownShowsInstallInstructions() {
+    // MARK: first-run setup
+
+    func testMissingServiceShowsOnboardingAndInstallMakesTheAppUsable() {
         launch("daemon-down")
-        XCTAssertTrue(element("daemon.down").waitForExistence(timeout: timeout))
-        XCTAssertTrue(app.staticTexts["sudo /usr/local/bin/openwarp service install"].exists ||
-                      app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'service install'")).count > 0)
+        let install = app.buttons["onboarding.install"]
+        XCTAssertTrue(install.waitForExistence(timeout: timeout), "onboarding is shown when the service is missing")
+        XCTAssertTrue(element("onboarding.title").exists)
+        XCTAssertFalse(cloud.exists, "Home's connect button is not offered without the service")
+        install.click()
+        // The fake installer "installs" the service; the app then verifies it and shows Home.
+        XCTAssertTrue(cloud.waitForExistence(timeout: timeout), "Home appears once the service is verified")
+        waitForStatus("Disconnected")
+        cloud.click()
+        waitForStatus("Connected")
+    }
+
+    func testFailedInstallShowsTheErrorAndStaysOnOnboarding() {
+        launch("install-fails")
+        let install = app.buttons["onboarding.install"]
+        XCTAssertTrue(install.waitForExistence(timeout: timeout))
+        install.click()
+        let error = element("onboarding.error")
+        XCTAssertTrue(error.waitForExistence(timeout: timeout), "the installer's error is shown")
+        XCTAssertTrue(text(error).contains("Input/output error"), "is \(text(error))")
+        XCTAssertEqual(text(install), "Try Again")
+        XCTAssertFalse(cloud.exists, "no success state after a failed install")
+        XCTAssertFalse(element("onboarding.ready").exists)
+    }
+
+    func testManualSetupShowsTheTerminalCommand() {
+        launch("daemon-down")
+        let manual = app.buttons["onboarding.manual"]
+        XCTAssertTrue(manual.waitForExistence(timeout: timeout))
+        manual.click()
+        let command = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'service install' OR value CONTAINS 'service install'")).firstMatch
+        XCTAssertTrue(command.waitForExistence(timeout: timeout), "the sudo command is shown")
         open("About")   // About stays available without the service
         assertPageTitle("About")
+    }
+
+    func testOutdatedServiceShowsTheUpdateBanner() {
+        launch("outdated")
+        waitForStatus("Disconnected")
+        let update = app.buttons["banner.update"]
+        XCTAssertTrue(update.waitForExistence(timeout: timeout), "the update banner is shown")
+        update.click()
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element("banner.outdated"))
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: timeout), .completed, "the banner goes away once updated")
+    }
+
+    // MARK: menu bar dashboard
+
+    /// Opens the menu bar panel, or skips when the status item cannot be reached
+    /// (for example when the menu bar is hidden on a CI runner).
+    private func openDashboard() throws -> XCUIElement {
+        let item = app.statusItems.firstMatch
+        guard item.waitForExistence(timeout: timeout) else { throw XCTSkip("the menu bar item is not reachable here") }
+        item.click()
+        let button = element("dash.connect")
+        guard button.waitForExistence(timeout: timeout) else { throw XCTSkip("the menu bar panel did not open") }
+        return button
+    }
+
+    func testMenuBarDashboardConnectsAndShowsLiveTraffic() throws {
+        launch()
+        waitForStatus("Disconnected")
+        let connect = try openDashboard()
+        XCTAssertEqual(text(element("dash.status")), "Disconnected")
+        connect.click()
+        let status = element("dash.status")
+        XCTAssertTrue(wait("label == 'Connected' OR value == 'Connected'", on: status), "is \(text(status))")
+        // Rates need two polls; totals come straight from the daemon's usage counters.
+        let rate = element("dash.download.rate")
+        XCTAssertTrue(wait("value ENDSWITH '/s' OR label ENDSWITH '/s'", on: rate), "download rate is \(text(rate))")
+        let total = element("dash.download.total")
+        XCTAssertTrue(wait("value CONTAINS 'B' OR label CONTAINS 'B'", on: total), "download total is \(text(total))")
+        let ip = element("dash.location.system").descendants(matching: .any)["value.Public IP"]
+        XCTAssertTrue(wait("value == '198.51.100.7'", on: ip), "the public IP through WARP is shown")
+    }
+
+    func testPublicIPLookupCanBeTurnedOff() throws {
+        launch()
+        open("Settings")
+        let toggle = app.checkBoxes["toggle.lookup_public_ip"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: timeout))
+        scrollIntoView(toggle)
+        XCTAssertEqual(isOn(toggle), true, "on by default")
+        toggle.click()
+        XCTAssertTrue(wait("value == 0", on: toggle))
+        _ = try openDashboard()
+        XCTAssertTrue(element("dash.location.enable").waitForExistence(timeout: timeout), "the dashboard offers to turn it back on")
     }
 
     // MARK: navigation

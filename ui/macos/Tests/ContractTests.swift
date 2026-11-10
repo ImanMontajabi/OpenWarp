@@ -18,6 +18,28 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(s.dns?.fallback_queries, 2)
         XCTAssertEqual(s.network, "Wi-Fi")
         XCTAssertEqual(ConnState(s), .connected)
+        XCTAssertEqual(s.version, FakeDaemon.version, "the daemon reports its version")
+        // Usage spans the whole connection, so it can exceed the current transport's counters.
+        XCTAssertEqual(s.usage?.tx_bytes, 5_123_456)
+        XCTAssertEqual(s.usage?.rx_bytes, 48_654_321)
+        XCTAssertEqual(s.usage?.since, "2026-01-02T03:04:05Z")
+    }
+
+    func testServiceStatusesDecodeToSetupPhases() throws {
+        let cases: [(String, SetupPhase)] = [
+            ("service-not-installed.json", .needed(.notInstalled)),
+            ("service-installed-not-running.json", .needed(.notRunning)),
+            ("service-outdated.json", .needed(.outdated(nil))),
+            ("service-up-to-date.json", .ready),
+        ]
+        for (file, phase) in cases {
+            let s = try Contract.decode(ServiceStatus.self, file)
+            XCTAssertEqual(SetupModel.phase(for: s), phase, file)
+        }
+        let outdated = try Contract.decode(ServiceStatus.self, "service-outdated.json")
+        XCTAssertEqual(outdated.program, "/usr/local/bin/openwarp")
+        XCTAssertNil(outdated.version)
+        XCTAssertNotNil(try Contract.decode(ServiceStatus.self, "service-not-installed.json").error)
     }
 
     func testConnectingWithErrorIsRetrying() throws {
@@ -101,10 +123,36 @@ final class FakeDaemonFidelityTests: XCTestCase {
         let keys = Set((try JSONSerialization.jsonObject(with: s) as! [String: Any]).keys)
         XCTAssertTrue(keys.isSubset(of: contractKeys), "unknown keys: \(keys.subtracting(contractKeys))")
 
+        XCTAssertNotNil(status.usage, "the fake reports usage like the daemon")
+        let (s2, _) = await fake.run(["status"])
+        let later = try JSONDecoder().decode(Status.self, from: s2)
+        XCTAssertGreaterThan(later.usage!.rx_bytes, status.usage!.rx_bytes, "traffic grows between polls")
+
         let (r, _) = await fake.run(["registration", "show"])
         XCTAssertNoThrow(try JSONDecoder().decode(Registration.self, from: r))
         let (d, _) = await fake.run(["registration", "devices"])
         XCTAssertEqual(try JSONDecoder().decode([Device].self, from: d).count, 2)
+    }
+
+    func testServiceStatusUsesOnlyContractKeysAndInstallBringsItUp() async throws {
+        let contractKeys = try ["service-not-installed.json", "service-up-to-date.json", "service-outdated.json"]
+            .reduce(into: Set<String>()) { $0.formUnion((try Contract.object($1) as! [String: Any]).keys) }
+        let fake = FakeDaemon(scenario: .daemonDown)
+        let (down, err) = await fake.run(["service", "status"])
+        XCTAssertNil(err, "service status works without the daemon, like the CLI")
+        XCTAssertTrue(Set((try JSONSerialization.jsonObject(with: down) as! [String: Any]).keys).isSubset(of: contractKeys))
+        XCTAssertEqual(SetupModel.phase(for: try JSONDecoder().decode(ServiceStatus.self, from: down)), .needed(.notInstalled))
+        let (_, statusErr) = await fake.run(["status"])
+        XCTAssertNotNil(statusErr)
+
+        await fake.installService()
+        let (up, _) = await fake.run(["service", "status"])
+        XCTAssertTrue(Set((try JSONSerialization.jsonObject(with: up) as! [String: Any]).keys).isSubset(of: contractKeys))
+        XCTAssertEqual(SetupModel.phase(for: try JSONDecoder().decode(ServiceStatus.self, from: up)), .ready)
+
+        let old = FakeDaemon(scenario: .outdated)
+        let (o, _) = await old.run(["service", "status"])
+        XCTAssertEqual(SetupModel.phase(for: try JSONDecoder().decode(ServiceStatus.self, from: o)), .needed(.outdated(nil)))
     }
 
     func testValidatesLikeTheCLI() async {
