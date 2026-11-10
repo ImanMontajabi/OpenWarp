@@ -21,7 +21,7 @@ print(" ".join(sorted({"%sx%s" % (r["PixelWidth"], r["Scale"]) for r in json.loa
 for want in 16x1 32x2 32x1 64x2 128x1 256x2 256x1 512x2 512x1 1024x2; do
   case " $renditions " in *" $want "*) ;; *) err "Assets.car lacks the AppIcon rendition ${want%x*}px @${want#*x}x" ;; esac
 done
-cli=$(sed -n 's/^const version = "\(.*\)"$/\1/p' "$(dirname "$0")/../cmd/openwarp/main.go")
+cli=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' "$(dirname "$0")/../internal/buildinfo/buildinfo.go")
 [ "$(key CFBundleShortVersionString)" = "$cli" ] || err "app version $(key CFBundleShortVersionString) != CLI version $cli"
 exe="$APP/Contents/MacOS/$(key CFBundleExecutable)"
 for arch in "$@"; do

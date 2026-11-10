@@ -230,6 +230,7 @@ final class SnapshotTests: XCTestCase {
         }
         guard let goldenData = try? Data(contentsOf: url), let golden = NSBitmapImageRep(data: goldenData) else {
             attach(png, "\(name)-actual")
+            save(png, "\(name).png")
             return XCTFail("no golden for \(name); record it with OPENWARP_RECORD_SNAPSHOTS=1")
         }
         let (differing, total) = Self.diff(golden, actual)
