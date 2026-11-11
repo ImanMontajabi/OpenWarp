@@ -46,6 +46,9 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ### Security
 
+- Built with Go 1.27.4, which fixes GO-2026-6859 (CVE-2026-97054) in `net/http`: an HTTP/1 server that uses
+  `MaxBytesReader` could crash. OpenWarp's control socket and local proxy do not use `MaxBytesReader`, so the
+  crash is not known to be reachable, but every binary is now built with the fixed standard library.
 - The control socket of the root service no longer lets every local user control it. Requests are authorized
   from the connecting process's kernel-reported user: any user may read the status; only root, administrators
   and the user who installed the service (recorded by `service install`) may connect, disconnect, change settings
