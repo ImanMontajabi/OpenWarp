@@ -182,6 +182,31 @@ func TestControlSettingsResetKeepsAlwaysOn(t *testing.T) {
 	}
 }
 
+func TestControlSettingsResetKeepsKillSwitch(t *testing.T) {
+	c := newControlHarness(t)
+	if code, s := c.do("PATCH", "/v1/settings", `{"kill_switch":true}`); code != 200 || s["kill_switch"] != true {
+		t.Fatalf("kill switch: %d %v", code, s)
+	}
+	if !c.savedSettings().KillSwitch {
+		t.Fatal("kill switch not saved")
+	}
+	if code, s := c.do("POST", "/v1/settings/reset", ""); code != 200 || s["kill_switch"] != true {
+		t.Fatalf("reset dropped the kill switch: %d %v", code, s)
+	}
+	_, st := c.do("GET", "/v1/status", "")
+	prot, _ := st["protection"].(map[string]any)
+	if prot["kill_switch"] != KSStandby || prot["state"] != ProtUnprotected {
+		t.Fatalf("protection while disconnected: %v", prot)
+	}
+}
+
+func TestControlVerifyNeedsAConnection(t *testing.T) {
+	c := newControlHarness(t)
+	if code, m := c.do("POST", "/v1/verify", ""); code != 400 || m["error"] != "not connected" {
+		t.Fatalf("verify: %d %v", code, m)
+	}
+}
+
 func TestControlDisconnectWhenIdle(t *testing.T) {
 	c := newControlHarness(t)
 	if code, _ := c.do("POST", "/v1/disconnect", ""); code != 200 {

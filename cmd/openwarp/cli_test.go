@@ -21,10 +21,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
+	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
 func TestMain(m *testing.M) {
+	// The CLI under test behaves as a release build, so the JSON contract shows what users get
+	// ("version": "0.1.0"). TestServiceStatusTellsDevelopmentBuildsApart covers development builds.
+	buildinfo.Build = ""
 	if os.Getenv("OPENWARP_TEST_RUN_MAIN") == "1" {
 		main()
 		os.Exit(0)
@@ -33,8 +38,8 @@ func TestMain(m *testing.M) {
 }
 
 type request struct {
-	Method, Path string
-	Body         map[string]any
+	Method, Path, Query string
+	Body                map[string]any
 }
 
 type route func(body map[string]any) (int, any)
@@ -79,7 +84,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := r.Method + " " + r.URL.Path
 	// Handlers run under the lock: they share state with the test goroutine.
 	f.mu.Lock()
-	f.reqs = append(f.reqs, request{r.Method, r.URL.Path, body})
+	f.reqs = append(f.reqs, request{r.Method, r.URL.Path, r.URL.RawQuery, body})
 	code, v := http.StatusNotFound, any(map[string]string{"error": "no route for " + key})
 	if h := f.routes[key]; h != nil {
 		code, v = h(body)
@@ -157,7 +162,7 @@ func runCLI(t *testing.T, sock string, args ...string) result {
 
 func TestCLIVersionHelpAndUnknownInput(t *testing.T) {
 	f := newFakeDaemon(t)
-	if r := runCLI(t, f.sock, "-V"); r.code != 0 || r.stdout != "openwarp "+version+"\n" {
+	if r := runCLI(t, f.sock, "-V"); r.code != 0 || r.stdout != "openwarp "+buildinfo.Full()+"\n" {
 		t.Fatalf("-V: %+v", r)
 	}
 	if r := runCLI(t, f.sock, "help"); r.code != 0 || !strings.Contains(r.stdout, "Usage: openwarp") {
@@ -384,6 +389,81 @@ func TestCLIRegistrationCommands(t *testing.T) {
 	}
 }
 
+func TestCLILeakProtectionCommands(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.settingsRoutes(state.DefaultSettings())
+	for _, c := range []struct {
+		arg  string
+		want bool
+	}{{"on", true}, {"off", false}} {
+		if r := runCLI(t, f.sock, "killswitch", c.arg); r.code != 0 {
+			t.Fatalf("killswitch %s: %+v", c.arg, r)
+		}
+		if got := f.lastPatch(t); len(got) != 1 || got["kill_switch"] != c.want {
+			t.Fatalf("killswitch %s sent %v", c.arg, got)
+		}
+	}
+	n := len(f.requests())
+	if r := runCLI(t, f.sock, "killswitch", "maybe"); r.code != 1 || !strings.Contains(r.stderr, "unknown killswitch command") {
+		t.Fatalf("bad argument: %+v", r)
+	}
+	if len(f.requests()) != n {
+		t.Fatal("a bad argument reached the daemon")
+	}
+
+	f.on("GET /v1/status", func(map[string]any) (int, any) { return 200, fixtureStatusConnected() })
+	r := runCLI(t, f.sock, "killswitch", "status")
+	if r.code != 0 || !strings.Contains(r.stdout, "Protection: verified") || !strings.Contains(r.stdout, "Kill switch: protecting") || !strings.Contains(r.stdout, "IPv6: blocked") {
+		t.Fatalf("killswitch status: %+v", r)
+	}
+	if r := runCLI(t, f.sock, "status"); !strings.Contains(r.stdout, "Kill switch: protecting") {
+		t.Fatalf("status without protection: %q", r.stdout)
+	}
+
+	verdict := fixtureVerification()
+	f.on("POST /v1/verify", func(map[string]any) (int, any) { return 200, verdict })
+	r = runCLI(t, f.sock, "verify")
+	if r.code != 0 || !strings.Contains(r.stdout, "PASS  ipv4_route") || !strings.Contains(r.stdout, "Result: verified") {
+		t.Fatalf("verify: %+v", r)
+	}
+	reqs := f.requests()
+	if last := reqs[len(reqs)-1]; last.Path != "/v1/verify" || last.Query != "" {
+		t.Fatalf("plain verify asked for the Cloudflare check: %+v", last)
+	}
+	runCLI(t, f.sock, "verify", "--cloudflare")
+	reqs = f.requests()
+	if last := reqs[len(reqs)-1]; last.Query != "cloudflare=1" {
+		t.Fatalf("verify --cloudflare sent %+v", last)
+	}
+
+	// A failed verification is a failing exit status, so scripts can rely on it.
+	failed := *fixtureVerification()
+	failed.Result = "failed"
+	failed.Checks = append(slices.Clone(failed.Checks), daemon.Check{Name: "dns", Status: "fail", Detail: "system DNS uses 192.0.2.1, not set by OpenWarp"})
+	f.on("POST /v1/verify", func(map[string]any) (int, any) { return 200, &failed })
+	if r := runCLI(t, f.sock, "verify"); r.code != 1 || !strings.Contains(r.stdout, "FAIL  dns") || !strings.Contains(r.stderr, "verification failed") {
+		t.Fatalf("failed verify: %+v", r)
+	}
+	incomplete := daemon.Verification{Result: "incomplete", Checks: []daemon.Check{{Name: "tunnel", Status: "pass"}}}
+	f.on("POST /v1/verify", func(map[string]any) (int, any) { return 200, incomplete })
+	if r := runCLI(t, f.sock, "verify"); r.code != 0 || !strings.Contains(r.stdout, "openwarp verify --cloudflare") {
+		t.Fatalf("incomplete verify: %+v", r)
+	}
+}
+
+func TestCLIRecoverNeedsRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: recover would change pf")
+	}
+	f := newFakeDaemon(t)
+	if r := runCLI(t, f.sock, "recover"); r.code != 1 || !strings.Contains(r.stderr, "run with sudo") {
+		t.Fatalf("recover: %+v", r)
+	}
+	if len(f.requests()) != 0 {
+		t.Fatal("recover must work without the daemon")
+	}
+}
+
 func toStrings(v any) []string {
 	var out []string
 	for _, x := range v.([]any) {
@@ -414,6 +494,7 @@ func TestCLIJSONContract(t *testing.T) {
 		{"settings-default.json", []string{"-j", "settings"}, "GET /v1/settings", state.DefaultSettings()},
 		{"registration.json", []string{"-j", "registration", "show"}, "GET /v1/registration", fixtureRegistration()},
 		{"devices.json", []string{"-j", "registration", "devices"}, "GET /v1/registration/devices", fixtureDevices()},
+		{"verify-verified.json", []string{"-j", "verify", "--cloudflare"}, "POST /v1/verify", fixtureVerification()},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {

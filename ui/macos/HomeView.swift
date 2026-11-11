@@ -62,11 +62,17 @@ struct HomeView: View {
         switch s {
         case .connected:
             if let p = st?.proxy { return "Proxy listening on \(p)" }
-            return st?.mode.hasPrefix("do") == true ? "Your DNS queries are private." : "Your Internet is private."
+            // Say what the mode does, not more: WARP hides traffic from the local network and the sites'
+            // view of your IP address, but it is not anonymity (protection.go reports the details).
+            switch st?.mode {
+            case "doh", "dot": return "Your DNS queries are encrypted."
+            case "tunnel_only": return "Your traffic goes through Cloudflare. DNS is not changed."
+            default: return "Your traffic goes through Cloudflare."
+            }
         case .connecting: return st?.reason ?? "Connecting…"
         case .retrying: return st?.error ?? "Retrying…"
         case .paused: return st?.reason ?? "Paused on a trusted network."
-        case .disconnected: return "Your Internet is not private."
+        case .disconnected: return "Your traffic uses your normal network."
         case .unknown: return "Waiting for the OpenWarp service…"
         }
     }

@@ -9,9 +9,11 @@ package sysnet
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"net/netip"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -31,9 +33,21 @@ type TunConfig struct {
 	SplitMode string     // "exclude" or "include"
 	Split     []netip.Prefix
 	DNS       []netip.Addr // nil = leave system DNS alone
+	// Journal is a file that records the changes so Recover can undo them after a crash ("" = none).
+	Journal string
 }
 
-func run(name string, args ...string) (string, error) {
+// IPv6 handling reported by Applied.IPv6.
+const (
+	IPv6Tunnel  = "tunnel"  // IPv6 goes through the tunnel
+	IPv6Blocked = "blocked" // the tunnel has no IPv6: IPv6 outside the exclusions is rejected, not leaked
+	IPv6System  = "system"  // include mode: IPv6 outside the included ranges uses the physical network
+)
+
+// run executes a command and returns its combined output. Tests replace runCmd.
+func run(name string, args ...string) (string, error) { return runCmd(name, args...) }
+
+var runCmd = func(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, bytes.TrimSpace(out))
@@ -79,13 +93,39 @@ func gwArg(g Gateway) string {
 
 // Applied holds what was changed so it can be undone.
 type Applied struct {
-	mu     sync.Mutex
-	routes [][]string // "route" args to delete
-	dns    map[string][]string
+	mu      sync.Mutex
+	routes  [][]string // "route" args to delete
+	kept    []string   // destinations that already had a route, left alone
+	dns     map[string][]string
+	journal string
+	ipv6    string
+}
+
+// IPv6 reports how IPv6 is handled (IPv6Tunnel, IPv6Blocked, IPv6System; "" for DNS-only changes).
+func (a *Applied) IPv6() string {
+	if a == nil {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ipv6
+}
+
+func (a *Applied) save() {
+	if a.journal == "" {
+		return
+	}
+	a.mu.Lock()
+	j := &journal{Routes: a.routes, DNS: a.dns}
+	err := writeJournal(a.journal, j)
+	a.mu.Unlock()
+	if err != nil {
+		log.Printf("sysnet: journal: %v", err)
+	}
 }
 
 func Apply(c TunConfig) (*Applied, error) {
-	a := &Applied{dns: map[string][]string{}}
+	a := &Applied{dns: map[string][]string{}, journal: c.Journal}
 	fail := func(err error) (*Applied, error) { a.Undo(); return nil, err }
 
 	if c.V4.IsValid() {
@@ -93,9 +133,12 @@ func Apply(c TunConfig) (*Applied, error) {
 			return fail(err)
 		}
 	}
+	v6 := false
 	if c.V6.IsValid() {
 		if _, err := run("ifconfig", c.Iface, "inet6", c.V6.String(), "prefixlen", "128"); err != nil {
-			log.Printf("sysnet: ipv6 address: %v", err)
+			log.Printf("sysnet: ipv6 address: %v (IPv6 will be blocked instead)", err)
+		} else {
+			v6 = true
 		}
 	}
 	if c.MTU > 0 {
@@ -108,7 +151,8 @@ func Apply(c TunConfig) (*Applied, error) {
 		return fail(fmt.Errorf("no physical default route: %v", err4))
 	}
 
-	add := func(prefix netip.Prefix, via string, iface bool) {
+	// via is a gateway, an interface (iface) or, for reject routes, the loopback address.
+	add := func(prefix netip.Prefix, via string, iface bool, extra ...string) {
 		fam := "-inet"
 		if prefix.Addr().Is6() {
 			fam = "-inet6"
@@ -122,9 +166,15 @@ func Apply(c TunConfig) (*Applied, error) {
 		} else {
 			args = append(args, via)
 		}
-		if _, err := run("route", args...); err != nil {
-			// "File exists": an equivalent route already exists.
-			if !strings.Contains(err.Error(), "File exists") {
+		args = append(args, extra...)
+		if err := runRoute(args...); err != nil {
+			// A route for this destination already exists (macOS's own link-local, broadcast or LAN route, or
+			// another program's): it is not ours, so it is neither recorded nor ever deleted by Undo.
+			if errors.Is(err, errRouteExists) {
+				a.mu.Lock()
+				a.kept = append(a.kept, prefix.String())
+				a.mu.Unlock()
+			} else {
 				log.Printf("sysnet: %v", err)
 			}
 			return
@@ -149,13 +199,21 @@ func Apply(c TunConfig) (*Applied, error) {
 		for _, p := range c.Split {
 			add(p, c.Iface, true)
 		}
+		a.ipv6 = IPv6System
 	} else {
 		// Two halves beat the existing default route without replacing it.
 		add(netip.MustParsePrefix("0.0.0.0/1"), c.Iface, true)
 		add(netip.MustParsePrefix("128.0.0.0/1"), c.Iface, true)
-		if c.V6.IsValid() {
+		if v6 {
 			add(netip.MustParsePrefix("::/1"), c.Iface, true)
 			add(netip.MustParsePrefix("8000::/1"), c.Iface, true)
+			a.ipv6 = IPv6Tunnel
+		} else {
+			// No IPv6 in the tunnel: reject IPv6 instead of letting it use the physical network. Apps get
+			// an immediate "no route" and fall back to IPv4 (Happy Eyeballs); exclusions below still work.
+			add(netip.MustParsePrefix("::/1"), "::1", false, "-reject")
+			add(netip.MustParsePrefix("8000::/1"), "::1", false, "-reject")
+			a.ipv6 = IPv6Blocked
 		}
 		for _, p := range c.Split {
 			switch {
@@ -172,6 +230,13 @@ func Apply(c TunConfig) (*Applied, error) {
 			log.Printf("sysnet: dns: %v", err)
 		}
 	}
+	a.save()
+	a.mu.Lock()
+	if len(a.kept) > 0 {
+		log.Printf("sysnet: added %d routes; %d destinations already had a route, left alone: %s",
+			len(a.routes), len(a.kept), strings.Join(a.kept, ", "))
+	}
+	a.mu.Unlock()
 	return a, nil
 }
 
@@ -225,8 +290,16 @@ func (a *Applied) Undo() {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	var skipped []string
 	for i := len(a.routes) - 1; i >= 0; i-- {
-		run("route", a.routes[i]...)
+		if why := notOurs(a.routes[i]); why != "" {
+			skipped = append(skipped, why)
+			continue
+		}
+		runRoute(a.routes[i]...)
+	}
+	if len(skipped) > 0 {
+		log.Printf("sysnet: left %d routes alone that are no longer OpenWarp's: %s", len(skipped), strings.Join(skipped, "; "))
 	}
 	a.routes = nil
 	for svc, prev := range a.dns {
@@ -240,13 +313,100 @@ func (a *Applied) Undo() {
 		run("killall", "-HUP", "mDNSResponder")
 	}
 	a.dns = map[string][]string{}
+	if a.journal != "" {
+		os.Remove(a.journal)
+	}
 }
 
 // SetSystemDNS points every network service at servers (used by DNS-only
 // modes, where there is no tunnel interface).
-func SetSystemDNS(servers []netip.Addr) (*Applied, error) {
-	a := &Applied{dns: map[string][]string{}}
-	return a, a.setDNS(servers)
+func SetSystemDNS(servers []netip.Addr, journalPath string) (*Applied, error) {
+	a := &Applied{dns: map[string][]string{}, journal: journalPath}
+	err := a.setDNS(servers)
+	a.save()
+	return a, err
+}
+
+// Recover undoes the changes recorded in a journal left by a daemon that did not shut down cleanly:
+// it deletes the routes it had added and restores each network service's previous DNS servers.
+func Recover(journalPath string) error {
+	j, err := readJournal(journalPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrNoJournal
+	}
+	if err != nil {
+		// Unreadable or unexpected: leave it for a person to look at rather than run anything from it.
+		return err
+	}
+	a := &Applied{routes: j.Routes, dns: j.DNS, journal: journalPath}
+	if a.dns == nil {
+		a.dns = map[string][]string{}
+	}
+	a.Undo()
+	return nil
+}
+
+// Route is where the routing table sends a destination.
+type Route struct {
+	Iface  string
+	Reject bool // a reject or blackhole route: the packet is dropped
+}
+
+var reFlags = regexp.MustCompile(`(?m)^\s*flags:\s*<([^>]*)>`)
+
+// RouteTo asks the routing table where traffic to dst goes (`route -n get`). ok is false when there is no
+// route at all.
+func RouteTo(dst netip.Addr) (r Route, ok bool, err error) {
+	args := []string{"-n", "get", dst.String()}
+	if dst.Is6() {
+		args = []string{"-n", "get", "-inet6", dst.String()}
+	}
+	out, err := run("route", args...)
+	// macOS's route exits 0 when the lookup fails; only its output says so.
+	if strings.Contains(out, "not in table") || (err != nil && strings.Contains(err.Error(), "not in table")) {
+		return Route{}, false, nil
+	}
+	if err != nil {
+		return Route{}, false, err
+	}
+	if rerr := routeResult(out); rerr != nil {
+		return Route{}, false, fmt.Errorf("route %s: %w", strings.Join(args, " "), rerr)
+	}
+	return parseRoute(out), true, nil
+}
+
+func parseRoute(out string) (r Route) {
+	if m := reIf.FindStringSubmatch(out); m != nil {
+		r.Iface = m[1]
+	}
+	if m := reFlags.FindStringSubmatch(out); m != nil {
+		r.Reject = strings.Contains(m[1], "REJECT") || strings.Contains(m[1], "BLACKHOLE")
+	}
+	return r
+}
+
+// SystemResolvers returns the DNS servers of the system's primary resolver, including loopback ones (the
+// local DNS proxy), as `scutil --dns` reports them.
+func SystemResolvers() ([]netip.Addr, error) {
+	out, err := run("scutil", "--dns")
+	if err != nil {
+		return nil, err
+	}
+	return parseResolvers(out), nil
+}
+
+func parseResolvers(out string) []netip.Addr {
+	block := out
+	if i := strings.Index(out, "resolver #2"); i > 0 {
+		block = out[:i]
+	}
+	var res []netip.Addr
+	for _, m := range reNS.FindAllStringSubmatch(block, -1) {
+		if a, err := netip.ParseAddr(strings.Split(m[1], "%")[0]); err == nil {
+			res = append(res, a)
+		}
+	}
+	return res
 }
 
 var reNS = regexp.MustCompile(`nameserver\[\d+\]\s*:\s*(\S+)`)

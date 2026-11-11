@@ -99,6 +99,8 @@ jobs:
         with:
           go-version-file: go.mod
       - name: build.sh
+        env:
+          OPENWARP_RELEASE: "1"   # the plain release version, without a dev build identifier
         run: ./build.sh
       - name: Verify the bundle and notices
         run: |

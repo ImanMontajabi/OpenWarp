@@ -26,8 +26,6 @@ import (
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
-const version = buildinfo.Version
-
 var jsonOut bool
 
 const usage = `openwarp - Cloudflare WARP compatible client
@@ -43,6 +41,13 @@ Connection:
   connect | disconnect
   mode <warp|warp+doh|warp+dot|doh|dot|proxy|tunnel_only>
   stats                                 Tunnel / DNS statistics
+
+Leak protection:
+  killswitch on|off|status              Block traffic outside the tunnel (experimental; pf, needs the service)
+  verify [--cloudflare]                 Check routes, DNS and the kill switch (--cloudflare: also ask
+                                        Cloudflare whether this request arrives through WARP)
+  recover                               (sudo) Remove the kill switch rules and undo routes/DNS left
+                                        by a crashed daemon; works without the daemon
 
 Registration:
   registration new [--accept-tos]       Register this device with Cloudflare
@@ -76,7 +81,7 @@ func main() {
 		case "-j", "--json":
 			jsonOut = true
 		case "-V", "--version":
-			fmt.Println("openwarp", version)
+			fmt.Println("openwarp", buildinfo.Full())
 			return
 		case "-h", "--help":
 			fmt.Print(usage)
@@ -200,6 +205,12 @@ func run(args []string) error {
 		return patch(map[string]any{"mode": rest[0]})
 	case "stats":
 		return stats()
+	case "killswitch":
+		return killSwitchCmd(rest)
+	case "verify":
+		return verifyCmd(slices.Contains(rest, "--cloudflare"))
+	case "recover":
+		return recoverCmd()
 	case "registration":
 		return registration(rest)
 	case "tunnel":
@@ -231,6 +242,15 @@ func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	dir := fs.String("state", state.DefaultDir(), "state directory")
 	sock := fs.String("socket", daemon.SocketPath(), "control socket path")
+	access := daemon.DefaultAccess()
+	fs.Func("allow-uid", "also let this user control the daemon (repeatable; `service install` adds the installing user)", func(v string) error {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return fmt.Errorf("not a user ID: %q", v)
+		}
+		access.UIDs = append(access.UIDs, uint32(n))
+		return nil
+	})
 	fs.Parse(args)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	store, err := state.Open(*dir)
@@ -238,9 +258,11 @@ func runDaemon(args []string) error {
 		return err
 	}
 	eng := daemon.NewEngine(store)
+	eng.SetAccess(access)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log.Printf("openwarp daemon %s (state %s, euid %d)", version, *dir, os.Geteuid())
+	log.Printf("openwarp daemon %s (state %s, euid %d; control: root%s, users %v)", buildinfo.Full(), *dir, os.Geteuid(),
+		map[bool]string{true: ", administrators", false: ""}[access.Admins], access.UIDs)
 	err = eng.Serve(ctx, *sock)
 	eng.Shutdown()
 	return err
@@ -286,6 +308,7 @@ func status(listen bool) error {
 					line += "\nProxy: socks5/http://" + st.Proxy
 				}
 			}
+			line += "\n" + protectionText(st.Protection)
 			if line != last {
 				fmt.Println(line)
 				last = line
@@ -514,6 +537,80 @@ func listSettings() error {
 	fmt.Println("Fallback domains:")
 	for _, x := range s.FallbackDomains {
 		fmt.Println("  " + x)
+	}
+	return nil
+}
+
+// ---------- leak protection ----------
+
+func protectionText(p daemon.Protection) string {
+	ks := p.KillSwitch
+	if p.KillSwitchDetail != "" {
+		ks += " (" + p.KillSwitchDetail + ")"
+	}
+	out := "Protection: " + p.State + "\nKill switch: " + ks
+	if p.IPv6 != "" {
+		out += "\nIPv6: " + p.IPv6
+	}
+	if p.DNS != "" {
+		out += "\nDNS: " + p.DNS
+	}
+	return out
+}
+
+func killSwitchCmd(args []string) error {
+	need(args, 1, "on|off|status")
+	switch args[0] {
+	case "on", "off":
+		return patch(map[string]any{"kill_switch": args[0] == "on"})
+	case "status":
+		var st daemon.Status
+		if err := call("GET", "/v1/status", nil, &st); err != nil {
+			return err
+		}
+		if jsonOut {
+			printJSON(st.Protection)
+			return nil
+		}
+		fmt.Println(protectionText(st.Protection))
+		return nil
+	}
+	return fmt.Errorf("unknown killswitch command %q (on, off or status)", args[0])
+}
+
+func verifyCmd(cloudflare bool) error {
+	path := "/v1/verify"
+	if cloudflare {
+		path += "?cloudflare=1"
+	}
+	var v daemon.Verification
+	if err := call("POST", path, nil, &v); err != nil {
+		return err
+	}
+	if jsonOut {
+		printJSON(v)
+		return nil
+	}
+	for _, c := range v.Checks {
+		fmt.Printf("%-5s %-12s %s\n", strings.ToUpper(c.Status), c.Name, c.Detail)
+	}
+	fmt.Println("Result:", v.Result)
+	if v.Result == "incomplete" && !cloudflare {
+		fmt.Println("Nothing failed, but nothing proved the tunnel either: run `openwarp verify --cloudflare`.")
+	}
+	if v.Result == "failed" {
+		return errors.New("verification failed")
+	}
+	return nil
+}
+
+// recoverCmd is the way out when the kill switch blocks everything and the daemon is gone or stuck.
+func recoverCmd() error {
+	if os.Geteuid() != 0 {
+		return errors.New("run with sudo")
+	}
+	for _, msg := range daemon.ResetNetwork(state.DefaultDir()) {
+		fmt.Println(msg)
 	}
 	return nil
 }

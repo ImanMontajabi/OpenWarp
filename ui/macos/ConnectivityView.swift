@@ -1,4 +1,4 @@
-// Connectivity: live DNS and tunnel details from the daemon, and key rotation.
+// Connectivity: leak protection, live DNS and tunnel details from the daemon, and key rotation.
 
 import SwiftUI
 
@@ -9,6 +9,8 @@ struct ConnectivityView: View {
     var body: some View {
         let st = store.status
         Page(title: "Connectivity") {
+            LeakProtectionSection()
+
             CardSection(title: "DNS connection") {
                 ValueRow(icon: "globe", title: "DNS protocol", value: st?.dns_protocol)
                 if let d = st?.dns {

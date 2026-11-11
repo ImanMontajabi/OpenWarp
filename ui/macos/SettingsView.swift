@@ -89,7 +89,7 @@ struct SettingsView: View {
                         .accessibilityLabel("Check for updates automatically")
                         .accessibilityIdentifier("toggle.check_updates")
                 }
-                Row(icon: "shippingbox", title: "OpenWarp \(updates.currentVersion)", subtitle: updateStatus) {
+                Row(icon: "shippingbox", title: "OpenWarp \(updates.displayVersion)", subtitle: updateStatus) {
                     if case .available = updates.state {
                         Button("Download") { updates.openReleasePage() }
                             .buttonStyle(.flat(.primary))

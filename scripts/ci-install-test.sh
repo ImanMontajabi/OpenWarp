@@ -6,6 +6,8 @@
 # and DNS are not touched.
 #
 #   scripts/ci-install-test.sh dist/OpenWarp-v0.1.0-macos-universal.dmg 0.1.0
+#
+# The version is the one the build reports (0.1.0, or 0.1.0+dev.1a2b3c4 for a development build).
 set -eu
 if [ "${GITHUB_ACTIONS:-}" != true ]; then
   echo "refusing to run outside GitHub Actions: this replaces /Applications/OpenWarp.app and the OpenWarp service" >&2

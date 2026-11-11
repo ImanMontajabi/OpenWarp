@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
+	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
 const (
@@ -78,14 +80,20 @@ func startService() error {
 }
 
 // launchdPlist is the LaunchDaemon definition for a daemon binary at program.
-func launchdPlist(program string) string {
+// launchdPlist is the LaunchDaemon definition. allow are the users (besides root and administrators) who may
+// control the service: the user who installed it.
+func launchdPlist(program string, allow ...uint32) string {
+	args := "<string>" + program + "</string><string>daemon</string>"
+	for _, uid := range allow {
+		args += fmt.Sprintf("<string>--allow-uid</string><string>%d</string>", uid)
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>` + label + `</string>
   <key>ProgramArguments</key>
-  <array><string>` + program + `</string><string>daemon</string></array>
+  <array>` + args + `</array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>/var/log/openwarp.log</string>
@@ -206,18 +214,32 @@ func service(action string) error {
 			return fmt.Errorf("refusing to install the root service: %v", err)
 		}
 		stopService(label)
-		if err := writeAtomic(plistPath, []byte(launchdPlist(helperPath)), 0o644); err != nil {
+		var allow []uint32
+		if uid, ok := installingUser(os.Getenv, consoleUID); ok {
+			allow = append(allow, uid)
+			fmt.Printf("The service can be controlled by root, administrators and user %d.\n", uid)
+		}
+		if err := writeAtomic(plistPath, []byte(launchdPlist(helperPath, allow...)), 0o644); err != nil {
 			return err
 		}
 		installLink()
 		if err := startService(); err != nil {
 			return err
 		}
+		// launchctl returns once the job is loaded, before the daemon listens on its socket: a command run
+		// right after an install that returned at that point failed with "connection refused".
+		if err := waitReady(daemonStatus, buildinfo.Full(), readyTimeout, time.Sleep); err != nil {
+			return fmt.Errorf("installed and started %s, but %v (logs: /var/log/openwarp.log)", label, err)
+		}
 		fmt.Println("Installed and started", label, "(logs: /var/log/openwarp.log)")
 		return nil
 	case "uninstall":
 		removeLegacy()
 		stopService(label)
+		// The stopped daemon may have kept the kill switch rules (fail closed); nothing would remove them now.
+		for _, msg := range daemon.ResetNetwork(state.DefaultDir()) {
+			fmt.Println(msg)
+		}
 		os.Remove(plistPath)
 		if dst, _ := os.Readlink(linkPath); dst == helperPath {
 			os.Remove(linkPath)
@@ -227,6 +249,66 @@ func service(action string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown service action %q (install, uninstall or status)", action)
+}
+
+// readyTimeout bounds how long `service install` waits for the new daemon to answer.
+const readyTimeout = 15 * time.Second
+
+const readyPoll = 250 * time.Millisecond
+
+func daemonStatus() (daemon.Status, error) {
+	var st daemon.Status
+	err := call("GET", "/v1/status", nil, &st)
+	return st, err
+}
+
+// waitReady polls the control socket until the daemon answers with version want (the binary just installed,
+// not an old process that is still shutting down), for at most timeout.
+func waitReady(status func() (daemon.Status, error), want string, timeout time.Duration, sleep func(time.Duration)) error {
+	var last string
+	for waited := time.Duration(0); ; waited += readyPoll {
+		st, err := status()
+		switch {
+		case err == nil && st.Version == want:
+			return nil
+		case err != nil:
+			last = err.Error()
+		default:
+			last = fmt.Sprintf("it reports version %s instead of %s", st.Version, want)
+		}
+		if waited >= timeout {
+			return fmt.Errorf("the service did not answer on %s within %s: %s", daemon.SocketPath(), timeout, last)
+		}
+		sleep(readyPoll)
+	}
+}
+
+// installingUser is the user on whose behalf `service install` runs: the one who ran sudo, or, for the app's
+// installer (an administrator prompt, which runs as root without SUDO_UID), the user logged in at the
+// console. Root itself is not recorded (it is always allowed).
+func installingUser(getenv func(string) string, console func() (uint32, bool)) (uint32, bool) {
+	if v := getenv("SUDO_UID"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 32); err == nil && n != 0 {
+			return uint32(n), true
+		}
+	}
+	if uid, ok := console(); ok && uid != 0 {
+		return uid, true
+	}
+	return 0, false
+}
+
+// consoleUID is the owner of /dev/console: the user logged in at the screen.
+func consoleUID() (uint32, bool) {
+	fi, err := os.Stat("/dev/console")
+	if err != nil {
+		return 0, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
 }
 
 // ServiceStatus is `openwarp -j service status`: what the app checks before
@@ -253,7 +335,7 @@ type serviceProbe struct {
 }
 
 func serviceStatus(p serviceProbe) ServiceStatus {
-	s := ServiceStatus{AppVersion: buildinfo.Version, Socket: p.socket}
+	s := ServiceStatus{AppVersion: buildinfo.Full(), Socket: p.socket}
 	if data, err := p.readPlist(); err == nil {
 		s.Installed = true
 		s.Program = plistProgram(string(data))
@@ -264,7 +346,7 @@ func serviceStatus(p serviceProbe) ServiceStatus {
 	} else {
 		s.Error = err.Error()
 	}
-	s.UpToDate = s.Installed && s.Loaded && s.Running && s.Version == buildinfo.Version && s.Program == helperPath
+	s.UpToDate = s.Installed && s.Loaded && s.Running && s.Version == buildinfo.Full() && s.Program == helperPath
 	return s
 }
 
@@ -286,12 +368,8 @@ func printServiceStatus() error {
 	s := serviceStatus(serviceProbe{
 		readPlist: func() ([]byte, error) { return os.ReadFile(plistPath) },
 		loaded:    func() bool { return loaded(label) },
-		status: func() (daemon.Status, error) {
-			var st daemon.Status
-			err := call("GET", "/v1/status", nil, &st)
-			return st, err
-		},
-		socket: daemon.SocketPath(),
+		status:    daemonStatus,
+		socket:    daemon.SocketPath(),
 	})
 	if jsonOut {
 		printJSON(s)

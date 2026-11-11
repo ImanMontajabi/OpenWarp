@@ -99,6 +99,20 @@ final class UpdatesTests: XCTestCase {
         XCTAssertEqual(gh.requests, 1)
     }
 
+    func testDevelopmentBuildsShowTheirBuildButCompareOnlyTheVersion() async {
+        XCTAssertEqual(AppInfo.displayVersion("0.1.0", build: nil), "0.1.0")
+        XCTAssertEqual(AppInfo.displayVersion("0.1.0", build: ""), "0.1.0")
+        XCTAssertEqual(AppInfo.displayVersion("0.1.0", build: "dev.1a2b3c4"), "0.1.0 (dev.1a2b3c4)")
+        let gh = ScriptedReleases(.success(Self.release("v0.1.0")))
+        let c = UpdateChecker(fetcher: gh, defaults: defaults(), currentVersion: "0.1.0", build: "dev.1a2b3c4")
+        XCTAssertEqual(c.displayVersion, "0.1.0 (dev.1a2b3c4)")
+        await c.check().value
+        XCTAssertNil(c.bannerVersion, "a development build of 0.1.0 is not offered the 0.1.0 release")
+        gh.result = .success(Self.release("v0.2.0"))
+        await c.check().value
+        XCTAssertEqual(c.bannerVersion?.version, "0.2.0")
+    }
+
     func testDismissedVersionStaysHiddenUntilANewerOne() async {
         let d = defaults()
         let gh = ScriptedReleases(.success(Self.release("v0.2.0")))

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/ImanMontajabi/OpenWarp/internal/api"
 	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/dnsproxy"
+	"github.com/ImanMontajabi/OpenWarp/internal/firewall"
 	"github.com/ImanMontajabi/OpenWarp/internal/keys"
 	"github.com/ImanMontajabi/OpenWarp/internal/proxy"
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
@@ -72,6 +74,8 @@ type Status struct {
 	Version string `json:"version"`
 	// Usage is the traffic of the current connection, summed over reconnects (absent when disconnected).
 	Usage *Usage `json:"usage,omitempty"`
+	// Protection: kill switch, IPv6/DNS handling and the last verification (protection.go).
+	Protection Protection `json:"protection"`
 }
 
 // Usage counts inner IP bytes through the tunnel since the user last connected. Each reconnect builds a
@@ -86,6 +90,8 @@ type Usage struct {
 type Engine struct {
 	store *state.Store
 	api   *api.Client
+	// access is who may use the control socket (access.go); DefaultAccess when nil.
+	access *Access
 
 	mu      sync.Mutex
 	want    bool
@@ -101,6 +107,31 @@ type Engine struct {
 	// Bytes of transports already torn down during the current connection (see Usage).
 	usedTx, usedRx uint64
 	usedSince      time.Time
+
+	// Leak protection (protection.go). ksMu guards fw calls and the ks fields; take it before mu, never
+	// while holding mu.
+	ksMu      sync.Mutex
+	fw        Firewall
+	fwErr     error // why fw is nil
+	ksApplied bool
+	ks        string
+	ksDetail  string
+	probe     Probe
+	journal   string
+	verif     *Verification
+	verifSess *session
+}
+
+// Options are the engine's system integrations; the zero value has no kill switch and no crash journal.
+type Options struct {
+	Firewall    Firewall
+	FirewallErr error  // why Firewall is nil (reported when the kill switch is switched on)
+	Probe       Probe  // nil: the real routing table and DNS configuration
+	Journal     string // file that records route and DNS changes for crash recovery ("": none)
+
+	// manual leaves the connection loop stopped: tests that drive the kill switch and status by hand use
+	// it, so the loop cannot change the state under them.
+	manual bool
 }
 
 // retireLocked folds a session's transport counters into the connection's usage
@@ -136,23 +167,79 @@ func NewEngine(store *state.Store) *Engine {
 		// lists this device as macOS (falls back per request; see api.Client.do).
 		c.Identity = api.MacIdentity
 	}
-	return NewEngineWithAPI(store, c)
+	var opts Options
+	if fw, err := firewall.New(store.Dir()); err == nil {
+		opts.Firewall = fw
+	} else {
+		opts.FirewallErr = err
+	}
+	if os.Geteuid() == 0 {
+		opts.Journal = filepath.Join(store.Dir(), JournalFile)
+	}
+	return NewEngineWithOptions(store, c, opts)
 }
 
-// NewEngineWithAPI is NewEngine with a custom API client (tests, overrides).
+// JournalFile (in the state directory) records the route and DNS changes of the current connection.
+const JournalFile = "network-journal.json"
+
+// NewEngineWithAPI is NewEngine with a custom API client and no system integrations (tests, overrides).
 func NewEngineWithAPI(store *state.Store, client *api.Client) *Engine {
+	return NewEngineWithOptions(store, client, Options{
+		FirewallErr: fmt.Errorf("%w: not enabled for this daemon", firewall.ErrUnsupported),
+	})
+}
+
+// NewEngineWithOptions is NewEngine with a custom API client and system integrations.
+func NewEngineWithOptions(store *state.Store, client *api.Client, opts Options) *Engine {
 	if u := os.Getenv("OPENWARP_API_URL"); u != "" {
 		client.BaseURL = u
 	}
-	e := &Engine{store: store, api: client, status: StatusDisconnected, kick: make(chan struct{}, 1)}
-	go e.loop()
+	e := &Engine{store: store, api: client, status: StatusDisconnected, kick: make(chan struct{}, 1),
+		fw: opts.Firewall, fwErr: opts.FirewallErr, probe: opts.Probe, journal: opts.Journal, ks: KSOff}
+	if e.probe == nil {
+		e.probe = systemProbe{}
+	}
+	if e.fw == nil && e.fwErr == nil {
+		e.fwErr = firewall.ErrUnsupported
+	}
 	store.Lock()
-	auto := store.S.Settings.AlwaysOn && store.S.Registration != nil
+	set := store.S.Settings
+	auto := set.AlwaysOn && store.S.Registration != nil
 	store.Unlock()
+	e.recoverNetwork(auto && set.KillSwitch && killSwitchScope(set) == "")
+	if !opts.manual {
+		go e.loop()
+	}
 	if auto {
 		e.Connect()
 	}
 	return e
+}
+
+// recoverNetwork cleans up after a previous daemon that did not shut down cleanly: it undoes the routes and
+// DNS servers recorded in the journal and removes leftover kill switch rules, unless the kill switch should
+// keep blocking until the tunnel is back (keepBlocking).
+func (e *Engine) recoverNetwork(keepBlocking bool) {
+	if e.journal != "" {
+		switch err := sysnet.Recover(e.journal); {
+		case err == nil:
+			log.Printf("restored the routes and DNS servers left by a previous run")
+		case !errors.Is(err, sysnet.ErrNoJournal):
+			log.Printf("network journal %s: %v (not applied)", e.journal, err)
+		}
+	}
+	if e.fw == nil {
+		return
+	}
+	if keepBlocking {
+		// The rules (if any survived) stay until the loop replaces them for the new connection attempt.
+		e.ksApplied = true
+		log.Printf("kill switch: on; traffic stays blocked until the tunnel is back")
+		return
+	}
+	if err := e.fw.Clear(); err != nil {
+		log.Printf("kill switch: removing leftover rules: %v", err)
+	}
 }
 
 // ---------- registration ----------
@@ -360,6 +447,11 @@ func (e *Engine) Disconnect() {
 	if sess != nil {
 		sess.close()
 	}
+	// After want is false the kill switch is removed, and no connection attempt can load it again.
+	e.store.Lock()
+	set := e.store.S.Settings
+	e.store.Unlock()
+	e.syncKillSwitch(set, nil, false)
 	e.poke()
 }
 
@@ -446,9 +538,21 @@ func (e *Engine) loop() {
 			if sess != nil {
 				e.reconnect()
 			}
+			e.syncKillSwitch(set, nil, true) // a trusted network is used directly, without the kill switch
 			e.setStatus(StatusPaused, why, nil)
 			e.wait(10 * time.Second)
 			continue
+		}
+
+		// Fail closed: with the kill switch on, nothing is connected without its rules in place.
+		if err := e.syncKillSwitch(set, sess, false); err != nil && sess == nil {
+			log.Printf("not connecting: %v", err)
+			e.setStatus(StatusConnecting, "Kill switch could not be enabled", err)
+			e.wait(backoff)
+			backoff = min(backoff*2, 30*time.Second)
+			continue
+		} else if err != nil {
+			log.Printf("kill switch: %v", err)
 		}
 
 		if sess == nil {
@@ -471,9 +575,25 @@ func (e *Engine) loop() {
 			}
 			e.sess = s
 			e.mu.Unlock()
+			// Let the new tunnel interface through (everything else stays blocked).
+			if err := e.syncKillSwitch(set, s, false); err != nil {
+				log.Printf("connected, but %v; retrying", err)
+				e.mu.Lock()
+				if e.sess == s {
+					e.retireLocked(s)
+					e.sess = nil
+				}
+				e.mu.Unlock()
+				s.close()
+				e.setStatus(StatusConnecting, "Kill switch could not be updated", err)
+				e.wait(backoff)
+				backoff = min(backoff*2, 30*time.Second)
+				continue
+			}
 			backoff = time.Second
 			e.setStatus(StatusConnected, "", nil)
 			log.Printf("connected (%s, %s)", set.Mode, s.describe())
+			go e.Verify(context.Background(), false) // local checks only; the Cloudflare check is on request
 			continue
 		}
 
@@ -600,7 +720,7 @@ func (e *Engine) startSession(ctx context.Context, set state.Settings) (*session
 		if err := e.startDNS(s, set, res, up); err != nil {
 			return nil, err
 		}
-		a, err := sysnet.SetSystemDNS([]netip.Addr{netip.MustParseAddr("127.0.0.1")})
+		a, err := sysnet.SetSystemDNS([]netip.Addr{netip.MustParseAddr("127.0.0.1")}, e.journal)
 		if err != nil {
 			s.close()
 			return nil, err
@@ -611,6 +731,10 @@ func (e *Engine) startSession(ctx context.Context, set state.Settings) (*session
 
 	cfg, err := e.ensureKey(ctx, set.Protocol, false)
 	if err != nil {
+		return nil, err
+	}
+	// Enrolling the key can move the registration to another edge address: let that one through.
+	if err := e.syncKillSwitch(set, nil, false); err != nil {
 		return nil, err
 	}
 	s.v4, _ = netip.ParseAddr(cfg.Interface.Addresses.V4)
@@ -700,7 +824,7 @@ func (e *Engine) startSession(ctx context.Context, set state.Settings) (*session
 		}
 		a, err := sysnet.Apply(sysnet.TunConfig{
 			Iface: s.iface, V4: s.v4, V6: s.v6, MTU: set.MTU, Endpoint: ep.Addr(),
-			SplitMode: string(set.SplitMode), Split: split, DNS: dns,
+			SplitMode: string(set.SplitMode), Split: split, DNS: dns, Journal: e.journal,
 		})
 		if err != nil {
 			s.close()
@@ -783,6 +907,12 @@ func hostOf(s string) (netip.Addr, bool) {
 // endpointCandidates builds the ordered list of edge addresses to try:
 // override, then the registration's v4 IP across the known ports, then v6.
 func endpointCandidates(set state.Settings, cfg *api.Config) ([]netip.AddrPort, error) {
+	_, err := sysnet.DefaultGateway(true)
+	return edgeCandidates(set, cfg, err == nil)
+}
+
+// edgeCandidates is endpointCandidates with the IPv6 edge included only when v6 is true.
+func edgeCandidates(set state.Settings, cfg *api.Config, v6 bool) ([]netip.AddrPort, error) {
 	if set.EndpointOverride != "" {
 		ap, err := netip.ParseAddrPort(set.EndpointOverride)
 		if err != nil {
@@ -812,10 +942,8 @@ func endpointCandidates(set state.Settings, cfg *api.Config) ([]netip.AddrPort, 
 	for _, p := range ports {
 		out = append(out, netip.AddrPortFrom(v4, p))
 	}
-	if a, ok := hostOf(ep.V6); ok {
-		if _, err := sysnet.DefaultGateway(true); err == nil {
-			out = append(out, netip.AddrPortFrom(a, ports[0]))
-		}
+	if a, ok := hostOf(ep.V6); ok && v6 {
+		out = append(out, netip.AddrPortFrom(a, ports[0]))
 	}
 	return out, nil
 }
@@ -828,12 +956,13 @@ func (e *Engine) Status() Status {
 	set := e.store.S.Settings
 	reg := e.store.S.Registration
 	e.store.Unlock()
+	ks, ksDetail := e.killSwitchState()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	st := Status{
 		Status: e.status, Reason: e.reason, Error: e.lastErr, Mode: set.Mode, ModeLabel: set.Mode.Label(),
 		Protocol: set.Protocol, Registered: reg != nil, Since: e.since, DNSProtocol: "off",
-		Version: buildinfo.Version,
+		Version: buildinfo.Full(),
 	}
 	// One snapshot of the transport's counters for both Usage and Tunnel, so they agree with each other.
 	var cur *tunnel.Stats
@@ -881,6 +1010,7 @@ func (e *Engine) Status() Status {
 		}
 	}
 	st.Network = e.network
+	st.Protection = e.protectionLocked(set, ks, ksDetail)
 	return st
 }
 
@@ -919,6 +1049,7 @@ func (e *Engine) UpdateSettings(fn func(*state.Settings) error) (state.Settings,
 	}
 	n, o := next, old
 	n.AlwaysOn, o.AlwaysOn = false, false
+	n.KillSwitch, o.KillSwitch = false, false // the loop updates the rules without reconnecting
 	n.TrustedSSIDs, o.TrustedSSIDs = nil, nil
 	n.DisableWiFi, o.DisableWiFi, n.DisableEthernet, o.DisableEthernet = false, false, false, false
 	if fmt.Sprint(n) != fmt.Sprint(o) {
@@ -929,13 +1060,22 @@ func (e *Engine) UpdateSettings(fn func(*state.Settings) error) (state.Settings,
 	return next, nil
 }
 
+// Shutdown closes the session (undoing routes and DNS). The kill switch rules stay if a connection is
+// wanted, so traffic stays blocked while the service restarts (an upgrade, a launchd restart); a manual
+// disconnect, `openwarp recover` or `openwarp service uninstall` removes them.
 func (e *Engine) Shutdown() {
 	e.mu.Lock()
 	sess := e.sess
 	e.retireLocked(sess)
 	e.sess = nil
+	want := e.want
 	e.mu.Unlock()
 	if sess != nil {
 		sess.close()
 	}
+	e.ksMu.Lock()
+	if e.ksApplied && want {
+		log.Printf("kill switch: rules kept while the service is stopped (remove with `sudo openwarp recover`)")
+	}
+	e.ksMu.Unlock()
 }

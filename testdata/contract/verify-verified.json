@@ -1,0 +1,36 @@
+{
+  "result": "verified",
+  "at": "2026-01-02T03:04:05Z",
+  "checks": [
+    {
+      "name": "tunnel",
+      "status": "pass",
+      "detail": "masque via 192.0.2.10:443"
+    },
+    {
+      "name": "ipv4_route",
+      "status": "pass",
+      "detail": "IPv4 goes through utun9"
+    },
+    {
+      "name": "ipv6_route",
+      "status": "pass",
+      "detail": "IPv6 is blocked (the tunnel has no IPv6 address)"
+    },
+    {
+      "name": "dns",
+      "status": "pass",
+      "detail": "system DNS: 192.0.2.53"
+    },
+    {
+      "name": "kill_switch",
+      "status": "pass",
+      "detail": "pf rules loaded and pf enabled"
+    },
+    {
+      "name": "cloudflare",
+      "status": "pass",
+      "detail": "Cloudflare reports warp=on (data centre XXX)"
+    }
+  ]
+}

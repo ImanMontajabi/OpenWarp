@@ -15,5 +15,10 @@
     "tx_bytes": 2048,
     "rx_bytes": 4096,
     "since": "2026-01-02T03:04:05Z"
+  },
+  "protection": {
+    "state": "connecting",
+    "kill_switch": "unavailable",
+    "kill_switch_detail": "in Local proxy mode only apps that use the proxy are tunnelled; the system network is not changed"
   }
 }

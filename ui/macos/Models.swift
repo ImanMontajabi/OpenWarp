@@ -25,6 +25,32 @@ struct Usage: Decodable, Equatable {
     var since: String
 }
 
+/// One verification step (protection.go Check). status: "pass", "fail" or "skip".
+struct Check: Decodable, Equatable {
+    var name: String
+    var status: String
+    var detail: String?
+}
+
+/// The last verification of the current connection. result: "verified", "failed" or "incomplete".
+struct Verification: Decodable, Equatable {
+    var result: String
+    var at: String
+    var checks: [Check]
+}
+
+/// Leak protection as the daemon reports it (protection.go Protection).
+struct Protection: Decodable, Equatable {
+    /// unprotected, connecting, blocking, unverified, verified, failed
+    var state: String
+    /// off, standby, protecting, blocking, unavailable, error
+    var kill_switch: String
+    var kill_switch_detail: String?
+    var ipv6: String?
+    var dns: String?
+    var verification: Verification?
+}
+
 struct Status: Decodable {
     var status: String
     var reason: String?
@@ -45,6 +71,7 @@ struct Status: Decodable {
     var network: String?
     var version: String?   // absent from daemons older than 0.1.0
     var usage: Usage?
+    var protection: Protection?   // absent from daemons without leak protection (0.1.0)
 }
 
 struct Settings: Decodable {
@@ -62,6 +89,7 @@ struct Settings: Decodable {
     var disable_wifi: Bool
     var disable_ethernet: Bool
     var post_quantum: Bool
+    var kill_switch: Bool?   // absent from daemons without leak protection (0.1.0)
 }
 
 struct Registration: Decodable {
@@ -182,6 +210,7 @@ final class Store: ObservableObject {
     @Published var daemonError: String?
     @Published var toast: Toast?
     @Published var busy = false
+    @Published private(set) var verifying = false
     /// The connect or disconnect the user just asked for, until the daemon has answered.
     @Published private(set) var pendingAction: PendingAction?
     /// Live throughput: through the tunnel (daemon counters) and over all interfaces.
@@ -328,6 +357,30 @@ final class Store: ObservableObject {
         }
     }
 
+
+    /// Verifies the current connection (`openwarp verify`, plus the Cloudflare check when asked) and shows
+    /// the outcome. The result itself arrives with the next status (Status.protection.verification).
+    @discardableResult
+    func verify(cloudflare: Bool) -> Task<Void, Never> {
+        Task {
+            verifying = true
+            let (d, err) = await backend.run(cloudflare ? ["verify", "--cloudflare"] : ["verify"])
+            verifying = false
+            // A failed verification exits non-zero but still prints the result.
+            if let v = try? JSONDecoder().decode(Verification.self, from: d) {
+                switch v.result {
+                case "verified": show(.success, "Connection verified.")
+                case "failed":
+                    let fail = v.checks.first { $0.status == "fail" }
+                    show(.error, fail.map { "\(ProtectionText.checkTitle($0.name)): \($0.detail ?? "failed")" } ?? "Verification failed.")
+                default: show(.success, "Nothing failed, but nothing proved the tunnel yet. Ask Cloudflare to confirm it.")
+                }
+            } else if let err {
+                show(.error, err)
+            }
+            await refreshStatus()
+        }
+    }
 
     func show(_ kind: Toast.Kind, _ text: String) { toast = Toast(kind: kind, text: text) }
 }

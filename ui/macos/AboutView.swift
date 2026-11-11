@@ -35,7 +35,7 @@ struct AboutView: View {
 
             VStack(spacing: Space.xxs) {
                 Text("Not affiliated with or endorsed by Cloudflare.")
-                Text("Version \(updates.currentVersion)")
+                Text("Version \(updates.displayVersion)")
                 Text("MIT License · open source")
             }
             .font(Typo.caption).foregroundStyle(Palette.textTertiary)

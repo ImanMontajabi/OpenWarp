@@ -52,5 +52,6 @@
   "trusted_ssids": null,
   "disable_wifi": false,
   "disable_ethernet": false,
-  "post_quantum": true
+  "post_quantum": true,
+  "kill_switch": false
 }

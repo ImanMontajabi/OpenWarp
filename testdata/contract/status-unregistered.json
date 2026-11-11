@@ -6,5 +6,9 @@
   "registered": false,
   "warp_plus": false,
   "dns_protocol": "udp",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "protection": {
+    "state": "unprotected",
+    "kill_switch": "off"
+  }
 }
