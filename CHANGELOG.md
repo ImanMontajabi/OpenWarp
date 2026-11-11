@@ -32,6 +32,11 @@ All notable changes to OpenWarp are documented here. The format follows
 - The Home page says what a connection does ("Your traffic goes through Cloudflare.", "Your DNS queries are
   encrypted.") instead of "Your Internet is private."
 - Resetting settings keeps the kill switch, like Always On.
+- Development builds identify themselves: `./build.sh` stamps the commit into the CLI, the daemon and the app
+  (`openwarp --version` prints e.g. `openwarp 0.1.0+dev.1a2b3c4`, with `.dirty` for uncommitted changes; the app
+  shows `0.1.0 (dev.1a2b3c4)`). Release builds (`OPENWARP_RELEASE=1`, set only by the release workflows) keep
+  the plain version. A development app no longer reports a release service of the same version number, or a
+  build of another commit, as up to date.
 
 ### Fixed
 

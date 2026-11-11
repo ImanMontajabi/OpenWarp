@@ -145,7 +145,7 @@ final class SnapshotTests: XCTestCase {
         view.environmentObject(store).environmentObject(setup).environmentObject(location())
             .environmentObject(UpdateChecker(fetcher: UpdatesTests.ScriptedReleases(.success(nil)),
                                              defaults: UserDefaults(suiteName: "openwarp.snapshots.\(UUID())")!,
-                                             currentVersion: "0.1.0"))
+                                             currentVersion: "0.1.0", build: nil))
     }
 
     private func setup(_ phase: SetupPhase) -> SetupModel {

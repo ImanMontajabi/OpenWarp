@@ -27,7 +27,7 @@ enum UITestLaunch {
                          setup: SetupModel(backend: fake, installer: FakeInstaller(daemon: fake)),
                          location: LocationModel(fetcher: FakeTrace(daemon: fake), defaults: defaults),
                          updates: UpdateChecker(fetcher: FakeReleases(tag: newer), defaults: defaults,
-                                                currentVersion: FakeDaemon.version))
+                                                currentVersion: FakeDaemon.version, build: nil))
     }
 }
 

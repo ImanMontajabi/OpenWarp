@@ -17,6 +17,18 @@ enum AppInfo {
     static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }
+
+    /// The development build identifier ("dev.1a2b3c4") build.sh writes into Info.plist (OpenWarpBuild);
+    /// nil for a release build.
+    static var build: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "OpenWarpBuild") as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// "0.1.0" for a release, "0.1.0 (dev.1a2b3c4)" for a development build.
+    static func displayVersion(_ version: String, build: String?) -> String {
+        guard let build, !build.isEmpty else { return version }
+        return "\(version) (\(build))"
+    }
 }
 
 /// A dotted numeric version ("0.1.0", "v1.2"). Pre-release suffixes ("-beta.1") are ignored.
@@ -105,14 +117,17 @@ final class UpdateChecker: ObservableObject {
     private let fetcher: ReleaseFetcher
     private let defaults: UserDefaults
     private let current: String
+    private let build: String?
     private let clock: () -> Date
     private var task: Task<Void, Never>?
 
     init(fetcher: ReleaseFetcher = GitHubReleases(), defaults: UserDefaults = .standard,
-         currentVersion: String = AppInfo.version, clock: @escaping () -> Date = Date.init) {
+         currentVersion: String = AppInfo.version, build: String? = AppInfo.build,
+         clock: @escaping () -> Date = Date.init) {
         self.fetcher = fetcher
         self.defaults = defaults
         self.current = currentVersion
+        self.build = build
         self.clock = clock
         automatic = defaults.object(forKey: Self.automaticKey) as? Bool ?? true
         lastChecked = defaults.object(forKey: Self.lastCheckKey) as? Date
@@ -120,6 +135,9 @@ final class UpdateChecker: ObservableObject {
     }
 
     var currentVersion: String { current }
+    /// The version as shown to the user, with the development build identifier when there is one. Update
+    /// checks compare only `currentVersion`.
+    var displayVersion: String { AppInfo.displayVersion(current, build: build) }
 
     /// The banner shows an available version unless the user dismissed exactly that one.
     var bannerVersion: (version: String, url: URL)? {

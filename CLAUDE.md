@@ -104,6 +104,12 @@ UI files:
   `\.owReduceMotion` (system Reduce Motion or `Motion.forceReduced`; read this, not `accessibilityReduceMotion`).
 - `FakeDaemon.swift`: `UITestLaunch.models()` and the Debug-only in-process fake daemon, installer and trace for UI tests.
   `FakeDaemon.version` must equal `internal/buildinfo` (checked by `scripts/check-repo.sh`).
+- Versions: `buildinfo.Version` is the release number; `buildinfo.Full()` is what the CLI, the daemon status and
+  `service status` report and compare: `0.1.0` for a release build, `0.1.0+dev.<sha7>[.dirty]` otherwise.
+  `build.sh` sets `buildinfo.Build` with `-ldflags -X` from `scripts/build-id.sh` (empty when `OPENWARP_RELEASE=1`,
+  set only in `release.yml`/`release-candidate.yml`) and writes it to Info.plist as `OpenWarpBuild` (shown via
+  `UpdateChecker.displayVersion`; update checks compare only the version). A plain `go build` reports
+  `0.1.0+dev.<vcs stamp>`. Tests in `cmd/openwarp` run as a release build (`TestMain`), so the contract stays `0.1.0`.
 - `Components.swift`: `Page`, `CardSection`, `Card`, `Row`, `ValueRow`, `FlatButtonStyle`, `PillToggleStyle`, `Reveal`/`Accordion`,
   `Segmented`, `ChoiceRow`, `DisclosureSection`, `StatusBadge`, `ToastBanner`, `ListEditorSheet`, `CopyButton`.
 - `Cloud.swift`: `CloudShape`, `CloudButton` (connect/disconnect), connecting pulse and rain animation.

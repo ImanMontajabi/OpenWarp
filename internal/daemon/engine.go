@@ -939,7 +939,7 @@ func (e *Engine) Status() Status {
 	st := Status{
 		Status: e.status, Reason: e.reason, Error: e.lastErr, Mode: set.Mode, ModeLabel: set.Mode.Label(),
 		Protocol: set.Protocol, Registered: reg != nil, Since: e.since, DNSProtocol: "off",
-		Version: buildinfo.Version,
+		Version: buildinfo.Full(),
 	}
 	if e.want {
 		u := Usage{TxBytes: e.usedTx, RxBytes: e.usedRx, Since: e.usedSince}

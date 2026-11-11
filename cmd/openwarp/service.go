@@ -258,7 +258,7 @@ type serviceProbe struct {
 }
 
 func serviceStatus(p serviceProbe) ServiceStatus {
-	s := ServiceStatus{AppVersion: buildinfo.Version, Socket: p.socket}
+	s := ServiceStatus{AppVersion: buildinfo.Full(), Socket: p.socket}
 	if data, err := p.readPlist(); err == nil {
 		s.Installed = true
 		s.Program = plistProgram(string(data))
@@ -269,7 +269,7 @@ func serviceStatus(p serviceProbe) ServiceStatus {
 	} else {
 		s.Error = err.Error()
 	}
-	s.UpToDate = s.Installed && s.Loaded && s.Running && s.Version == buildinfo.Version && s.Program == helperPath
+	s.UpToDate = s.Installed && s.Loaded && s.Running && s.Version == buildinfo.Full() && s.Program == helperPath
 	return s
 }
 

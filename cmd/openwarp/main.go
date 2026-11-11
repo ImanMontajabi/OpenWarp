@@ -26,8 +26,6 @@ import (
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
-const version = buildinfo.Version
-
 var jsonOut bool
 
 const usage = `openwarp - Cloudflare WARP compatible client
@@ -83,7 +81,7 @@ func main() {
 		case "-j", "--json":
 			jsonOut = true
 		case "-V", "--version":
-			fmt.Println("openwarp", version)
+			fmt.Println("openwarp", buildinfo.Full())
 			return
 		case "-h", "--help":
 			fmt.Print(usage)
@@ -253,7 +251,7 @@ func runDaemon(args []string) error {
 	eng := daemon.NewEngine(store)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log.Printf("openwarp daemon %s (state %s, euid %d)", version, *dir, os.Geteuid())
+	log.Printf("openwarp daemon %s (state %s, euid %d)", buildinfo.Full(), *dir, os.Geteuid())
 	err = eng.Serve(ctx, *sock)
 	eng.Shutdown()
 	return err

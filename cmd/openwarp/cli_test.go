@@ -21,11 +21,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
 	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
 func TestMain(m *testing.M) {
+	// The CLI under test behaves as a release build, so the JSON contract shows what users get
+	// ("version": "0.1.0"). TestServiceStatusTellsDevelopmentBuildsApart covers development builds.
+	buildinfo.Build = ""
 	if os.Getenv("OPENWARP_TEST_RUN_MAIN") == "1" {
 		main()
 		os.Exit(0)
@@ -158,7 +162,7 @@ func runCLI(t *testing.T, sock string, args ...string) result {
 
 func TestCLIVersionHelpAndUnknownInput(t *testing.T) {
 	f := newFakeDaemon(t)
-	if r := runCLI(t, f.sock, "-V"); r.code != 0 || r.stdout != "openwarp "+version+"\n" {
+	if r := runCLI(t, f.sock, "-V"); r.code != 0 || r.stdout != "openwarp "+buildinfo.Full()+"\n" {
 		t.Fatalf("-V: %+v", r)
 	}
 	if r := runCLI(t, f.sock, "help"); r.code != 0 || !strings.Contains(r.stdout, "Usage: openwarp") {

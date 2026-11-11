@@ -324,8 +324,8 @@ func TestEndToEndProxyModeOverMasque(t *testing.T) {
 		t.Fatalf("kill switch in proxy mode: %s / %+v", st.Status, st.Protection)
 	}
 	t.Logf("status: %s", body)
-	if st.Version != buildinfo.Version {
-		t.Fatalf("status reports version %q, want %q", st.Version, buildinfo.Version)
+	if st.Version != buildinfo.Full() {
+		t.Fatalf("status reports version %q, want %q", st.Version, buildinfo.Full())
 	}
 	// Usage covers the whole connection: equal to the transport's counters so far...
 	if st.Usage == nil || st.Usage.RxBytes != st.Tunnel.RxBytes || st.Usage.TxBytes != st.Tunnel.TxBytes || st.Usage.Since.IsZero() {

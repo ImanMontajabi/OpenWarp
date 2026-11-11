@@ -182,6 +182,35 @@ func TestServiceStatus(t *testing.T) {
 	}
 }
 
+// A development build is never "up to date" with a release service of the same version number, or with a
+// development build of another commit, so the app offers to install its own CLI.
+func TestServiceStatusTellsDevelopmentBuildsApart(t *testing.T) {
+	defer func(b string) { buildinfo.Build = b }(buildinfo.Build)
+	probe := func(daemonVersion string) serviceProbe {
+		return serviceProbe{
+			readPlist: func() ([]byte, error) { return []byte(launchdPlist(helperPath)), nil },
+			loaded:    func() bool { return true },
+			status:    func() (daemon.Status, error) { return daemon.Status{Version: daemonVersion}, nil },
+			socket:    "/var/run/openwarp.sock",
+		}
+	}
+	buildinfo.Build = "dev.1a2b3c4"
+	for daemonVersion, want := range map[string]bool{
+		buildinfo.Version:                  false, // the released 0.1.0 service
+		buildinfo.Version + "+dev.9f8e7d6": false, // a development build of another commit
+		buildinfo.Version + "+dev.1a2b3c4": true,  // this very build
+	} {
+		s := serviceStatus(probe(daemonVersion))
+		if s.UpToDate != want || s.AppVersion != buildinfo.Version+"+dev.1a2b3c4" {
+			t.Errorf("app %s, daemon %s: up_to_date=%v", s.AppVersion, daemonVersion, s.UpToDate)
+		}
+	}
+	buildinfo.Build = ""
+	if s := serviceStatus(probe(buildinfo.Version + "+dev.1a2b3c4")); s.UpToDate {
+		t.Error("a release app accepts a development service as up to date")
+	}
+}
+
 func TestServiceStatusContract(t *testing.T) {
 	dir := filepath.Join("..", "..", "testdata", "contract")
 	for _, c := range serviceCases() {

@@ -8,9 +8,14 @@ mkdir -p build
 echo "==> go test"
 go test ./... >/dev/null
 
-echo "==> openwarp (universal)"
-GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o build/openwarp-arm64 ./cmd/openwarp
-GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o build/openwarp-amd64 ./cmd/openwarp
+# Development builds carry their commit (0.1.0+dev.1a2b3c4[.dirty]) so they are never mistaken for a
+# release; OPENWARP_RELEASE=1 (release workflows only) builds the plain release version.
+BUILD=$(scripts/build-id.sh)
+LDFLAGS="-s -w -X github.com/ImanMontajabi/OpenWarp/internal/buildinfo.Build=$BUILD"
+
+echo "==> openwarp (universal)${BUILD:+, build $BUILD}"
+GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o build/openwarp-arm64 ./cmd/openwarp
+GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o build/openwarp-amd64 ./cmd/openwarp
 lipo -create -output build/openwarp build/openwarp-arm64 build/openwarp-amd64
 rm build/openwarp-arm64 build/openwarp-amd64
 
@@ -48,6 +53,10 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 </dict>
 </plist>
 EOF
+if [ -n "$BUILD" ]; then
+  # The app shows "0.1.0 (dev.1a2b3c4)"; CFBundleShortVersionString stays the plain version macOS expects.
+  plutil -insert OpenWarpBuild -string "$BUILD" "$APP/Contents/Info.plist"
+fi
 # Ad-hoc signatures (no Developer ID): the embedded CLI first, then the app that seals it. A failure stops
 # the build; macOS refuses to run unsigned arm64 code.
 codesign --force -s - "$APP/Contents/Resources/openwarp"
