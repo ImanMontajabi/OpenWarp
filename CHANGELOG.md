@@ -25,7 +25,8 @@ All notable changes to OpenWarp are documented here. The format follows
 - `sudo openwarp recover`: removes the kill switch rules and restores routes and DNS without the daemon.
 - [Privacy and leak protection](docs/privacy-and-leak-protection.md): threat model, what each mode protects,
   the kill switch, verification, and guidance for lawful peer-to-peer use. `scripts/leak-test.sh`: an opt-in,
-  root-only leak test for a real Mac (refuses to run in CI) with positive controls for every probe (TCP, DNS
+  root-only leak test for a real Mac (refuses to run in CI or while another VPN is connected; restores the
+  previous settings on any exit) with positive controls for every probe (TCP, DNS
   over UDP/TCP, NTP, IPv4/IPv6), packet captures of the physical interface, outage coverage, a crash without
   restart plus `openwarp recover`, and checks that pf, routes and DNS are restored.
 

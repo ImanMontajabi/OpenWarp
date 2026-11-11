@@ -242,7 +242,10 @@ blocked. Then it:
   the DNS servers to their state before the test;
 - disconnects normally and runs the same restoration checks.
 
-It refuses to run in CI, without root, or without `OPENWARP_LEAK_TEST=I-UNDERSTAND`:
+It refuses to run in CI, without root, without `OPENWARP_LEAK_TEST=I-UNDERSTAND`, or while another VPN (the
+official Cloudflare WARP client included) is connected. It prints the version of the service it tests, and it puts
+the mode, kill switch and connection back as they were when it ends, also after Ctrl-C, a closed terminal or an
+unexpected exit:
 
 ```sh
 sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh

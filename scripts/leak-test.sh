@@ -62,6 +62,14 @@ for k in sys.argv[1].split("."): d=(d or {}).get(k) if isinstance(d,dict) else N
 print("" if d is None else d)' "$1"; }
 "$OW" -j status | json registered | grep -q True || die "not registered"
 [ "$("$OW" -j settings | json split_mode)" = include ] && die "split tunnelling is in Include mode, where the kill switch is not used"
+# Another VPN that is up (the official Cloudflare WARP client included) changes routes and DNS itself, and the
+# results would not say anything about OpenWarp.
+WARP_CLI="/Applications/Cloudflare WARP.app/Contents/Resources/warp-cli"
+if [ -x "$WARP_CLI" ] && "$WARP_CLI" --accept-tos status 2>/dev/null | grep -qi 'status update: *connect'; then
+  die "the official Cloudflare WARP client is connected or connecting; disconnect it first"
+fi
+scutil --nc list 2>/dev/null | grep -q '^\* (Connected)' && die "another VPN is connected (scutil --nc list); disconnect it first"
+TESTED=$("$OW" -j status | json version)
 
 WORK=$(mktemp -d /tmp/openwarp-leak.XXXXXX) || die "mktemp failed"
 pass=0; fail=0; skip=0
@@ -114,12 +122,17 @@ OLD_MODE=$("$OW" -j settings | json mode)
 OLD_KS=$("$OW" -j settings | json kill_switch)
 OLD_STATUS=$("$OW" -j status | json status)
 RESOLVERS=$(scutil --dns | awk '/nameserver\[/{print $3}' | sort -u | tr '\n' ' ')
+echo "OpenWarp service version under test: ${TESTED:-unknown} ($HELPER)"
 echo "physical interface: $PHYS, router: ${GW:-none}, resolvers: $RESOLVERS"
 echo "pf before the test: $PF_BEFORE; previous mode: $OLD_MODE, kill switch: $OLD_KS, status: $OLD_STATUS"
 echo "work directory (captures, logs): $WORK"
 
-MANUAL=; HOLD=; TUNFLOW=; DUMP=; DUMP2=; WATCH=
+MANUAL=; HOLD=; TUNFLOW=; DUMP=; DUMP2=; WATCH=; RESTORED=
+# restore puts the service, mode, kill switch and connection back as they were. It runs once: at the end, on
+# Ctrl-C, a terminal that closes, or any unexpected exit after this point.
 restore() {
+  [ -n "$RESTORED" ] && return
+  RESTORED=1
   for p in $HOLD $TUNFLOW $WATCH $DUMP $DUMP2; do kill "$p" 2>/dev/null; done
   if [ -n "$MANUAL" ] && kill -0 "$MANUAL" 2>/dev/null; then kill "$MANUAL"; sleep 2; fi
   if ! launchctl print system/com.local.openwarp >/dev/null 2>&1; then
@@ -132,7 +145,8 @@ restore() {
   if [ "$OLD_KS" = True ]; then "$OW" killswitch on >/dev/null 2>&1; else "$OW" killswitch off >/dev/null 2>&1; fi
   [ "$OLD_STATUS" = Connected ] && "$OW" connect >/dev/null 2>&1
 }
-trap 'restore; echo "interrupted; settings restored"; exit 3' INT TERM
+trap 'restore; echo "interrupted; settings restored"; exit 3' INT TERM HUP
+trap 'restore' EXIT
 
 # after_checks WHERE TAG: pf, routes and DNS are back to their state before the test.
 TOKEN=
@@ -277,6 +291,8 @@ if [ -n "$PID" ] && [ -n "$PROBES" ]; then
   sleep 1
   T_KILL=$(now)
   kill -9 "$PID"
+  # Until the process is gone it may still answer as Connected.
+  i=0; while [ $i -lt 50 ] && kill -0 "$PID" 2>/dev/null; do sleep 0.1; i=$((i+1)); done
   if wait_status Connected 90; then T_UP=$(now); ok "reconnected after the restart"; else T_UP=$(now); bad "did not reconnect after the restart"; fi
   sleep 1
   touch "$WORK/stop"; wait "$WATCH"; WATCH=
@@ -337,8 +353,8 @@ sleep 2
 after_checks "after disconnecting" disconnect
 
 restore
-trap - INT TERM
-echo "== $pass passed, $fail failed, $skip skipped (settings restored: mode $OLD_MODE, kill switch $OLD_KS, status $OLD_STATUS)"
+trap - INT TERM HUP EXIT
+echo "== $pass passed, $fail failed, $skip skipped (service ${TESTED:-unknown}; settings restored: mode $OLD_MODE, kill switch $OLD_KS, status $OLD_STATUS)"
 echo "Not covered here: sleep/wake, network changes, a restart of the Mac, other active interfaces, WireGuard, the"
 echo "DoH/DoT/tunnel-only modes, Include split mode. Captures and logs: $WORK"
 [ $fail = 0 ]
