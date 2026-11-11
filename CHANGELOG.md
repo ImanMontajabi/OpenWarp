@@ -6,6 +6,12 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Built with Go 1.27.4, which fixes GO-2026-6859 (CVE-2026-97054) in `net/http`: an HTTP/1 server that uses
+  `MaxBytesReader` could crash. OpenWarp's control socket and local proxy do not use `MaxBytesReader`, so the
+  crash is not known to be reachable, but every binary is now built with the fixed standard library.
+
 ### Fixed
 
 - The daemon no longer crashes ("index out of range") when Cloudflare answers a key enrollment without a usable
