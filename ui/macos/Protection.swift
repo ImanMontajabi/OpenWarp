@@ -99,6 +99,7 @@ struct ProtectionBadge: View {
         .padding(.horizontal, Space.xs).padding(.vertical, 4)
         .background(color.opacity(0.14), in: Capsule())
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)   // a plain group exposes no value on macOS
         .accessibilityLabel("Protection")
         .accessibilityValue(label)
         .accessibilityIdentifier("protection.state")
@@ -126,6 +127,7 @@ struct CheckRow: View {
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.xs)
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)
         .accessibilityLabel(ProtectionText.checkTitle(check.name))
         .accessibilityValue("\(check.status): \(check.detail ?? "")")
         .accessibilityIdentifier("check.\(check.name)")
