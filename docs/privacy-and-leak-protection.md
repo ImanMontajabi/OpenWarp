@@ -254,7 +254,8 @@ blocked. Then it:
   probe is blocked again. pf's own rule counters show whether pf evaluated each test anchor at all: the one
   after OpenWarp's must never be evaluated, because OpenWarp's anchor ends evaluation for every packet, and the
   one before it must be. If the positive control fails anyway, the counters show whether the probe's packets
-  matched there. Anchors listed before OpenWarp's fail the check only if they have rules: pf keeps empty
+  matched there, and whether the kill switch counted them. Every blocked probe records why it failed: the
+  socket error (such as `EHOSTUNREACH` or `ENETUNREACH`) or a timeout. Anchors listed before OpenWarp's fail the check only if they have rules: pf keeps empty
   anchors, and an empty one cannot end evaluation. It reports what the main ruleset evaluates before
   `com.apple/*`, any translation rule with `pass` (which skips filtering), and the rules of every other
   `com.apple` anchor. No other pf rule is changed;

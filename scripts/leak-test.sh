@@ -360,8 +360,18 @@ if [ "$C_TCP4" = 1 ]; then
   else bad "could not load the test anchor $TEST_AFTER: $(cat "$WORK/pf-test.err")"; fi
   pfctl -q -a "$TEST_AFTER" -F all 2>/dev/null
   if pass_probe_rules | pfctl -q -a "$TEST_BEFORE" -f - 2>"$WORK/pf-test.err" && anchor_has_rules "$TEST_BEFORE"; then
+    pfctl -a "$ANCHOR" -vv -s rules >"$WORK/pf-killswitch.1.txt" 2>/dev/null
     check "positive control: the same rule in an anchor that sorts before it ($TEST_BEFORE) gets through" probe tcp "$PHYS" 1.1.1.1 443
+    pfctl -a "$ANCHOR" -vv -s rules >"$WORK/pf-killswitch.2.txt" 2>/dev/null
     pf_counters "$TEST_BEFORE" before
+    # Information only, for a positive control that failed: why the socket gave up, and which kill switch
+    # rules counted packets meanwhile (if 'block drop quick all' counted none, the probe's packets never
+    # reached pf; other traffic can add to the count).
+    info "  a second try of the probe: $(if probe tcp "$PHYS" 1.1.1.1 443 >/dev/null 2>"$WORK/pf-probe.err"; then echo answered; else cat "$WORK/pf-probe.err"; fi)"
+    probe pf-delta "$WORK/pf-killswitch.1.txt" "$WORK/pf-killswitch.2.txt" >"$WORK/pf-killswitch.delta"
+    if [ -s "$WORK/pf-killswitch.delta" ]; then
+      while read -r n rule; do info "  meanwhile the kill switch counted $n packets for: $rule"; done <"$WORK/pf-killswitch.delta"
+    else info "  meanwhile no kill switch rule counted a packet"; fi
     case $FIRST_EVAL in
       -) bad "could not read pf's counters for $TEST_BEFORE (see $WORK/pf-counters.before.txt)";;
       0) bad "pf never evaluated $TEST_BEFORE although it is listed before $ANCHOR: pf does not evaluate the com.apple anchors in the order they are listed";;

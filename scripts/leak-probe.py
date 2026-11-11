@@ -26,6 +26,7 @@ exactly like an app that binds to the physical network. Exit status 0 means an a
       of the PREFIXes, an edge host route, a route on one of the comma-separated TUNIFACES), "other"
       otherwise. Exit 1 if they differ.
 """
+import errno
 import ipaddress
 import os
 import re
@@ -97,18 +98,35 @@ def probe_ntp(iface, addr):
     return len(data) >= 48
 
 
+LAST_REASON = ""  # why the last probe failed: an errno name ("EHOSTUNREACH"), "timeout" or "no answer"
+
+
+def reason(e):
+    """A short name for a probe's OSError: the errno name, or "timeout"."""
+    if isinstance(e, socket.timeout) or e.errno is None:
+        return "timeout"
+    return errno.errorcode.get(e.errno, "errno%d" % e.errno)
+
+
 def run(iface, spec):
+    global LAST_REASON
     kind, *args = spec.split("|")
+    LAST_REASON = ""
     try:
         if kind == "tcp":
-            return probe_tcp(iface, *args)
-        if kind == "dns":
-            return probe_dns(iface, *args)
-        if kind == "ntp":
-            return probe_ntp(iface, *args)
-    except OSError:
+            ok = probe_tcp(iface, *args)
+        elif kind == "dns":
+            ok = probe_dns(iface, *args)
+        elif kind == "ntp":
+            ok = probe_ntp(iface, *args)
+        else:
+            raise SystemExit("unknown probe " + spec)
+    except OSError as e:
+        LAST_REASON = reason(e)
         return False
-    raise SystemExit("unknown probe " + spec)
+    if not ok:
+        LAST_REASON = "no answer"
+    return ok
 
 
 STREAM_RATE = 256 * 1024   # bytes per second
@@ -244,6 +262,18 @@ def routes_diff(before, after, tun, prefixes):
     return out
 
 
+def pf_delta(before, after):
+    """[(packets, rule)] for the rules whose packet counter grew between two `pfctl -vv -s rules` outputs of
+    one anchor (rules matched by position and text)."""
+    old = {(i, r): pk for i, (r, _, pk) in enumerate(pf_counters(before))}
+    out = []
+    for i, (r, _, pk) in enumerate(pf_counters(after)):
+        was = old.get((i, r))
+        if pk is not None and was is not None and pk > was:
+            out.append((pk - was, r))
+    return out
+
+
 def pf_counters(text):
     """[(rule, evaluations, packets)] from `pfctl -a ANCHOR -v -s rules` output.
 
@@ -266,7 +296,11 @@ def pf_counters(text):
 def main(argv):
     cmd = argv[1]
     if cmd in ("tcp", "dns", "ntp"):
-        return 0 if run(argv[2], "|".join([cmd] + argv[3:])) else 1
+        t = time.time()
+        if run(argv[2], "|".join([cmd] + argv[3:])):
+            return 0
+        sys.stderr.write("blocked: %s after %.3f s\n" % (LAST_REASON, time.time() - t))
+        return 1
     if cmd == "resolve":
         v4 = v6 = "-"
         for fam, var in ((socket.AF_INET, "v4"), (socket.AF_INET6, "v6")):
@@ -289,13 +323,18 @@ def main(argv):
                 for p in probes:
                     t = time.time()
                     ok = run(iface, p)
-                    f.write("%.3f %s %s\n" % (t, p, "ok" if ok else "blocked"))
+                    f.write("%.3f %s %s\n" % (t, p, "ok" if ok else "blocked " + LAST_REASON.replace(" ", "-")))
                     f.flush()
                     if not ok:
                         time.sleep(0.05)
         return 0
     if cmd == "stream":
         return stream(argv[2], argv[3], argv[4], argv[5])
+    if cmd == "pf-delta":
+        # One line per rule whose packet counter grew: "PACKETS RULE".
+        for n, rule in pf_delta(open(argv[2]).read(), open(argv[3]).read()):
+            print(n, rule)
+        return 0
     if cmd == "pf-counters":
         # One line per rule: "EVALUATIONS PACKETS RULE" ("-" when pfctl printed no counters for it).
         for rule, ev, pk in pf_counters(open(argv[2]).read()):
@@ -318,9 +357,15 @@ def main(argv):
         inside = [t for t in times if start <= t <= end]
         gaps = [b - a for a, b in zip([start] + inside, inside + [end])]
         gap = max(gaps) if gaps else end - start
-        print("%d attempts in %.1f s (%.1f s to %.1f s after the kill), longest gap %.2f s, %d got through"
+        why = {}
+        for r in rows:
+            if r[2] == "blocked" and start <= float(r[0]) <= end:
+                k = r[3] if len(r) > 3 else "?"
+                why[k] = why.get(k, 0) + 1
+        print("%d attempts in %.1f s (%.1f s to %.1f s after the kill), longest gap %.2f s, %d got through%s"
               % (len(inside), end - start, (inside[0] - start) if inside else 0, (inside[-1] - start) if inside else 0,
-                 gap, len(leaks)))
+                 gap, len(leaks),
+                 ("; blocked as " + ", ".join("%s %d" % kv for kv in sorted(why.items()))) if why else ""))
         for r in leaks[:5]:
             print("  got through: %s at +%.2f s" % (r[1], float(r[0]) - start))
         return 0 if not leaks and inside and gap <= 1.5 else 1

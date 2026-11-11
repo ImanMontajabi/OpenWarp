@@ -135,6 +135,61 @@ class PfCounters(unittest.TestCase):
         self.assertEqual(probe.pf_counters(""), [])
 
 
+class PfDelta(unittest.TestCase):
+    def test_rules_whose_packets_grew(self):
+        after = PF_VV.replace("Packets: 3 ", "Packets: 5 ").replace(
+            "Evaluations: 809       Packets: 0 ", "Evaluations: 811       Packets: 1 ")
+        self.assertEqual(probe.pf_delta(PF_VV, after), [
+            (2, "pass out quick on en0 inet proto tcp from any to 1.1.1.1 port = 443 no state"),
+            (1, "pass in quick on en0 inet proto tcp from 1.1.1.1 port = 443 to any no state"),
+        ])
+
+    def test_nothing_counted(self):
+        # Only evaluations changed: no rule decided a packet.
+        self.assertEqual(probe.pf_delta(PF_VV, PF_VV.replace("Evaluations: 812", "Evaluations: 900")), [])
+
+    def test_reloaded_rules_are_not_compared(self):
+        # A different rule at the same position (the daemon reloaded its anchor): no delta, not a wrong one.
+        other = PF_VV.replace("port = 443 no state", "port = 853 no state", 1).replace("Packets: 3 ", "Packets: 9 ")
+        self.assertEqual(probe.pf_delta(PF_VV, other), [])
+
+
+class Reasons(unittest.TestCase):
+    def test_errno_names(self):
+        import errno as e
+        self.assertEqual(probe.reason(OSError(e.EHOSTUNREACH, "No route to host")), "EHOSTUNREACH")
+        self.assertEqual(probe.reason(OSError(e.ENETUNREACH, "Network is unreachable")), "ENETUNREACH")
+        self.assertEqual(probe.reason(probe.socket.timeout("timed out")), "timeout")
+
+    def test_run_records_the_reason(self):
+        old = probe.probe_tcp
+        try:
+            def refused(*a):
+                raise OSError(65, "No route to host")
+            probe.probe_tcp = refused
+            self.assertFalse(probe.run("en0", "tcp|1.1.1.1|443"))
+            self.assertEqual(probe.LAST_REASON, "EHOSTUNREACH")
+            probe.probe_tcp = lambda *a: True
+            self.assertTrue(probe.run("en0", "tcp|1.1.1.1|443"))
+            self.assertEqual(probe.LAST_REASON, "")
+        finally:
+            probe.probe_tcp = old
+
+    def test_coverage_counts_the_reasons(self):
+        import contextlib, io
+        log = write("100.0 tcp|1.1.1.1|443 blocked EHOSTUNREACH\n100.5 dns|1.1.1.1|udp blocked timeout\n"
+                    "101.0 tcp|1.1.1.1|443 blocked EHOSTUNREACH\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = probe.main(["leak-probe.py", "coverage", log, "99.9", "101.2"])
+        self.assertEqual(rc, 0)
+        self.assertIn("0 got through; blocked as EHOSTUNREACH 2, timeout 1", out.getvalue())
+        # Logs written before the reasons were recorded still parse.
+        old = write("100.0 tcp|1.1.1.1|443 blocked\n100.4 tcp|1.1.1.1|443 blocked\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(probe.main(["leak-probe.py", "coverage", old, "99.9", "100.5"]), 0)
+
+
 class LeakTestScript(unittest.TestCase):
     def test_background_probes_are_processes(self):
         # `probe ... &` backgrounds the shell function: $! is then a subshell, and killing it left the Python

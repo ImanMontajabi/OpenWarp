@@ -17,6 +17,8 @@ All notable changes to OpenWarp are documented here. The format follows
     after the kill switch must never be evaluated. For the one before it, the counters show whether pf
     evaluated it and whether the probe's packets matched, which the 2026-11-11 runs could not tell when its
     positive control failed.
+  - Probes now record why they failed (the socket error, or a timeout), and the positive control also reports
+    which kill switch rules counted packets during its probe.
 
 ## [0.1.0] - 2026-11-11
 
