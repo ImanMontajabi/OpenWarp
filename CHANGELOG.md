@@ -44,6 +44,9 @@ All notable changes to OpenWarp are documented here. The format follows
   (apps fall back to IPv4).
 - After the daemon was killed while connected, its routes and DNS servers stayed behind (in the HTTPS/TLS modes
   that meant no DNS at all). They are recorded in a journal and restored on the next start.
+- The daemon no longer crashes ("index out of range") when Cloudflare answers a key enrollment without a usable
+  peer while an endpoint override is set. The answer is rejected with an error and not cached, so the next
+  attempt enrolls again.
 
 ## [0.1.0] - 2026-11-10
 
