@@ -9,7 +9,7 @@ All notable changes to OpenWarp are documented here. The format follows
 ### Added
 
 - Kill switch (experimental, off by default): while a connection is wanted, a pf ruleset in the anchor
-  `com.apple/openwarp` blocks all traffic outside the tunnel except the connection to Cloudflare's edge, the API
+  `com.apple/000.openwarp` blocks all traffic outside the tunnel except the connection to Cloudflare's edge, the API
   fallback addresses, DHCP/IPv6 neighbour discovery and the split-tunnel exclusions; DNS to the local network is
   blocked in the modes that manage DNS. It fails closed (no connection without its rules), stays in place while
   the service restarts or after a crash, and is removed on disconnect, on trusted networks, by
