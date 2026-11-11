@@ -143,8 +143,18 @@ rules ran through the extended test once on one Apple silicon Mac (2026-11-11, `
 mode, MASQUE): no probe got around the tunnel, including 29 probes over the 12.8 s of a daemon kill and restart;
 3 checks failed, all explained (the leak test misread pfctl's ALTQ notes as an anchor name; OpenWarp removed
 macOS's own `169.254` link-local route on disconnect and recover, fixed since; see the CHANGELOG), and the
-already-running download check was skipped because its download never started. The fixed version has not been
-run on a real Mac yet. Run `scripts/leak-test.sh` (below) before relying on it.
+already-running download check was skipped because its download never started.
+
+The 0.1.0 release build (the DMG) ran through the test twice on the same Mac (2026-11-11, Traffic and DNS mode,
+MASQUE): 61 of 62 checks passed in each run. No probe got around the tunnel, including during the daemon kill
+and restart and after a crash with no daemon running, and the packet capture saw nothing unexpected leave the
+physical interface. pf's rule counters showed that pf evaluates the `com.apple` anchors in listing order: it
+never reached the test anchor after OpenWarp's, and it did evaluate the one before it. The failing check is
+the positive control: the probe's packets never matched the `pass` rule in the earlier test anchor, so the
+test has not yet shown that it would catch a rule that overrides the kill switch. Why is still open; the test
+now records each probe's socket error and the kill switch's counters to find out. Two runs on one Mac are not
+broad validation: sleep/wake, network changes, a reboot, other interfaces, WireGuard and the other modes are
+untested. Run `scripts/leak-test.sh` (below) before relying on it.
 
 ## Who can control the service
 
