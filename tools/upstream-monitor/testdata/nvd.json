@@ -1,0 +1,4 @@
+{"resultsPerPage":2,"startIndex":0,"totalResults":2,"format":"NVD_CVE","version":"2.0","timestamp":"2026-11-10T00:00:00.000","vulnerabilities":[
+ {"cve":{"id":"CVE-2026-0003","published":"2026-11-01T10:00:00.000","lastModified":"2026-11-02T10:00:00.000","vulnStatus":"Analyzed","descriptions":[{"lang":"en","value":"The Cloudflare WARP client on macOS did not verify the edge key during the QUIC handshake."}],"references":[{"url":"https://github.com/cloudflare/advisories/security/advisories/GHSA-gggg-hhhh-jjjj"}]}},
+ {"cve":{"id":"CVE-2026-0009","published":"2026-11-01T10:00:00.000","lastModified":"2026-11-02T10:00:00.000","vulnStatus":"Rejected","descriptions":[{"lang":"en","value":"Rejected Cloudflare WARP entry."}],"references":[]}}
+]}

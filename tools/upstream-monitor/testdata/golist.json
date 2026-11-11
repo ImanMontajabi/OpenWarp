@@ -1,0 +1,4 @@
+{"Path":"github.com/ImanMontajabi/OpenWarp","Main":true}
+{"Path":"github.com/quic-go/quic-go","Version":"v0.65.0","Update":{"Path":"github.com/quic-go/quic-go","Version":"v0.66.0"}}
+{"Path":"github.com/google/btree","Version":"v1.1.2","Update":{"Path":"github.com/google/btree","Version":"v1.2.0"}}
+{"Path":"golang.org/x/crypto","Version":"v0.58.0"}

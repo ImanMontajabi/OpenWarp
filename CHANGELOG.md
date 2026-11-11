@@ -32,6 +32,13 @@ All notable changes to OpenWarp are documented here. The format follows
   order with temporary test anchors of its own (one sorting after the kill switch, one before as the positive
   control), uses a download that must be receiving data as the control for the already-open connection check,
   records every route change, and never counts a route difference at a destination OpenWarp manages as transient.
+- Upstream monitoring (repository maintenance, not part of the app): a daily workflow checks Cloudflare's
+  client changelog, security advisories, the NVD and the WARP blog, plus govulncheck and module updates and the
+  offline compatibility tests, and opens de-duplicated `upstream-monitoring` issues for what needs a maintainer
+  (`tools/upstream-monitor`, `docs/maintenance-monitoring.md`).
+- Offline compatibility tests for API response shapes and failures, the MASQUE transport (refused, silent and
+  dropped tunnels) and the edge address and port order; a manual, approval-gated live compatibility workflow
+  for proxy mode.
 
 ### Changed
 
@@ -46,6 +53,8 @@ All notable changes to OpenWarp are documented here. The format follows
   shows `0.1.0 (dev.1a2b3c4)`). Release builds (`OPENWARP_RELEASE=1`, set only by the release workflows) keep
   the plain version. A development app no longer reports a release service of the same version number, or a
   build of another commit, as up to date.
+- The weekly scheduled run of the Security workflow is replaced by the daily upstream monitor (govulncheck);
+  the Security workflow still gates every pull request.
 
 ### Security
 
