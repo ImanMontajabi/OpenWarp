@@ -40,7 +40,22 @@ func fixtureStatusConnected() daemon.Status {
 		Version: buildinfo.Version,
 		// More than the current transport: an earlier transport of this connection carried traffic too.
 		Usage: &daemon.Usage{TxBytes: 5_123_456, RxBytes: 48_654_321, Since: fixtureTime},
+		Protection: daemon.Protection{
+			State: daemon.ProtVerified, KillSwitch: daemon.KSProtecting, IPv6: "blocked", DNS: "tunnel",
+			Verification: fixtureVerification(),
+		},
 	}
+}
+
+func fixtureVerification() *daemon.Verification {
+	return &daemon.Verification{Result: "verified", At: fixtureTime, Checks: []daemon.Check{
+		{Name: "tunnel", Status: "pass", Detail: "masque via 192.0.2.10:443"},
+		{Name: "ipv4_route", Status: "pass", Detail: "IPv4 goes through utun9"},
+		{Name: "ipv6_route", Status: "pass", Detail: "IPv6 is blocked (the tunnel has no IPv6 address)"},
+		{Name: "dns", Status: "pass", Detail: "system DNS: 192.0.2.53"},
+		{Name: "kill_switch", Status: "pass", Detail: "pf rules loaded and pf enabled"},
+		{Name: "cloudflare", Status: "pass", Detail: "Cloudflare reports warp=on (data centre XXX)"},
+	}}
 }
 
 func fixtureStatusRetrying() daemon.Status {
@@ -58,6 +73,8 @@ func fixtureStatusRetrying() daemon.Status {
 		Network:     "Ethernet",
 		Version:     buildinfo.Version,
 		Usage:       &daemon.Usage{TxBytes: 2048, RxBytes: 4096, Since: fixtureTime},
+		Protection: daemon.Protection{State: daemon.ProtConnecting, KillSwitch: daemon.KSUnavailable,
+			KillSwitchDetail: "in Local proxy mode only apps that use the proxy are tunnelled; the system network is not changed"},
 	}
 }
 
@@ -69,6 +86,7 @@ func fixtureStatusUnregistered() daemon.Status {
 		Protocol:    state.ProtoMasque,
 		DNSProtocol: "udp",
 		Version:     buildinfo.Version,
+		Protection:  daemon.Protection{State: daemon.ProtUnprotected, KillSwitch: daemon.KSOff},
 	}
 }
 

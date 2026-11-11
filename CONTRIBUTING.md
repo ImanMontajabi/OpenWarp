@@ -20,8 +20,17 @@ fastest way to get a change in.
 
 ## Branches and releases
 
-- **`main`** is the development branch. Feature branches start from `main` and come back through squash-merged
-  pull requests; merged branches are deleted automatically.
+- **`main`** and **`release`** are the only permanent branches; neither is ever deleted.
+- **`main`** is the development branch: it holds integrated, reviewed work. Feature branches start from the latest
+  `main` and come back through squash-merged pull requests.
+- **Temporary branches** (`feat/…`, `fix/…`, `test/…`, `docs/…`, `ci/…`, `refactor/…`) live only while their pull
+  request is open. Once a pull request is merged into `main` and nothing else depends on the branch (no open pull
+  request based on it, no branch built on top of it), it is deleted, remotely (GitHub does this automatically) and
+  locally. Branches are deleted after they reach `main`, not after the next release. A branch whose pull request was
+  closed without merging, or whose state is unclear, is kept until the maintainer decides.
+- **Completed features accumulate on `main`** until the maintainer decides to publish a version. If `main` then
+  contains work that should not ship yet, it is not promoted as a whole; the maintainer decides how to proceed
+  (finish or revert the work on `main` first).
 - **`release`** holds what is ready to ship. It changes only through a pull request **from `main`** (merged with a
   merge commit, so the history of `main` stays intact), after the "Release candidate" workflow has checked the
   version, the changelog section, the third-party notices and the universal build. Pushes, force pushes and
@@ -52,7 +61,13 @@ layout) and check it with `scripts/verify-dmg.sh dist/OpenWarp.dmg <version>`.
    such as `fix:` or `feat:` are welcome but not required.
 6. Push and open a pull request. Fill in the template, including which tests you ran and their results, and
    before/after screenshots for UI changes.
-7. Address CI failures and review comments. PRs are squash-merged once every required check is green.
+7. Address CI failures and review comments. Merge conflicts with `main` are resolved with an ordinary merge of
+   `main` into the branch, never by rewriting a pushed branch's history.
+8. PRs are squash-merged once every required check is green **and the maintainer has approved the merge**.
+
+**Maintainer approval is required for:** merging any pull request; deleting a branch other than through GitHub's
+automatic deletion after a merge; promoting `main` to `release`; running the release workflow's publication steps,
+creating tags, and publishing a GitHub release.
 
 ## Local checks
 
@@ -78,6 +93,14 @@ in-process fake daemon (`ui/macos/FakeDaemon.swift`, Debug builds only), so they
 Commit re-recorded snapshot PNGs only after reviewing the visual diff, and mention it in the PR.
 
 CI also runs `staticcheck`, `govulncheck`, CodeQL (Go and Swift) and a secret scan; see `.github/workflows/`.
+
+## Upstream monitoring
+
+A daily workflow watches Cloudflare's official sources and OpenWarp's dependencies and opens issues labelled
+`upstream-monitoring` ([docs/maintenance-monitoring.md](docs/maintenance-monitoring.md)). Such an issue is a
+prompt to investigate, not a finding about OpenWarp: confirm the behaviour in OpenWarp with a test first, then fix
+it in a normal pull request. When Cloudflare changes an API response, add a redacted fixture of the new shape to
+`internal/api/testdata/compat` before changing the client.
 
 ## Changelog
 

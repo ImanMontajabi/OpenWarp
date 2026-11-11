@@ -4,8 +4,13 @@
 # and that nothing links against a developer machine's paths.
 #
 #   scripts/verify-dmg.sh dist/OpenWarp-v0.1.0-macos-universal.dmg 0.1.0 [arm64 x86_64]
+#
+# VERSION is the full version the build reports: 0.1.0 for a release build, 0.1.0+dev.1a2b3c4 for a
+# development build (scripts/build-id.sh). A release DMG must not carry a build identifier.
 set -eu
 DMG=$1; VERSION=$2; shift 2
+BASE=${VERSION%%+*}
+BUILD=${VERSION#"$BASE"}; BUILD=${BUILD#+}
 ARCHS=${*:-arm64 x86_64}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 fail=0
@@ -28,8 +33,10 @@ APP="$MNT/OpenWarp.app"
 
 # The bundle: icon, Info.plist, version, licenses, architectures.
 "$ROOT/scripts/verify-app-bundle.sh" "$APP" $ARCHS || fail=1
-[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$VERSION" ] \
-  || err "app version is not $VERSION"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$BASE" ] \
+  || err "app version is not $BASE"
+plist_build=$(/usr/libexec/PlistBuddy -c 'Print :OpenWarpBuild' "$APP/Contents/Info.plist" 2>/dev/null || true)
+[ "$plist_build" = "$BUILD" ] || err "app build identifier is '$plist_build', expected '$BUILD'"
 CLI="$APP/Contents/Resources/openwarp"
 cli_version=$("$CLI" --version 2>/dev/null || true)
 [ "$cli_version" = "openwarp $VERSION" ] || err "bundled CLI reports '$cli_version', expected 'openwarp $VERSION'"

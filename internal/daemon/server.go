@@ -105,6 +105,13 @@ func (e *Engine) Handler() http.Handler {
 		writeJSON(w, nil, nil)
 	})
 	mux.HandleFunc("POST /v1/disconnect", func(w http.ResponseWriter, r *http.Request) { e.Disconnect(); writeJSON(w, nil, nil) })
+	// Verify the current connection; ?cloudflare=1 adds the trace request to Cloudflare through the tunnel.
+	mux.HandleFunc("POST /v1/verify", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := ctxT(r)
+		defer cancel()
+		v, err := e.Verify(ctx, r.URL.Query().Get("cloudflare") == "1")
+		writeJSON(w, v, err)
+	})
 
 	mux.HandleFunc("GET /v1/settings", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, e.Settings(), nil) })
 	mux.HandleFunc("PATCH /v1/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -135,9 +142,10 @@ func (e *Engine) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /v1/settings/reset", func(w http.ResponseWriter, r *http.Request) {
 		s, err := e.UpdateSettings(func(s *state.Settings) error {
-			on := s.AlwaysOn
+			// Resetting never silently drops protection the user switched on.
+			on, ks := s.AlwaysOn, s.KillSwitch
 			*s = state.DefaultSettings()
-			s.AlwaysOn = on
+			s.AlwaysOn, s.KillSwitch = on, ks
 			return nil
 		})
 		writeJSON(w, s, err)
@@ -196,17 +204,33 @@ func (e *Engine) Handler() http.Handler {
 	return mux
 }
 
-// Serve listens on the unix control socket until ctx is cancelled.
+// SetAccess sets who may use the control socket (before Serve).
+func (e *Engine) SetAccess(a Access) { e.access = &a }
+
+// Serve listens on the unix control socket until ctx is cancelled. Every request but the status needs an
+// authorized peer (access.go).
 func (e *Engine) Serve(ctx context.Context, path string) error {
+	access := DefaultAccess()
+	if e.access != nil {
+		access = *e.access
+	}
 	os.Remove(path)
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		return err
 	}
-	// Like the official daemon's IPC socket, any local user may control it.
-	os.Chmod(path, 0o666)
-	srv := &http.Server{Handler: e.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	// The root service's socket is open to every local user, who may read the status; anything else is
+	// authorized per request from the kernel-reported peer credentials. A user daemon's socket is private.
+	mode := os.FileMode(0o600)
+	if os.Geteuid() == 0 {
+		mode = 0o666
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		ln.Close()
+		return err
+	}
+	srv := &http.Server{Handler: access.Wrap(e.Handler()), ConnContext: connContext, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

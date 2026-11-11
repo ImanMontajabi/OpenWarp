@@ -65,7 +65,8 @@ final class SnapshotTests: XCTestCase {
     }
 
     func testConnectivityConnected() throws {
-        try assertSnapshot("connectivity-connected", tab: .connectivity, status: "status-connected.json")
+        // The connected fixture reports the kill switch protecting, so the setting is on too.
+        try assertSnapshot("connectivity-connected", tab: .connectivity, status: "status-connected.json", killSwitch: true)
     }
 
     func testSettingsDefaults() throws {
@@ -126,10 +127,12 @@ final class SnapshotTests: XCTestCase {
 
     // MARK: helpers
 
-    private func assertSnapshot(_ name: String, tab: Tab, status: String, registered: Bool = true) throws {
+    private func assertSnapshot(_ name: String, tab: Tab, status: String, registered: Bool = true,
+                                killSwitch: Bool = false) throws {
         let store = Store(backend: MockBackend(), polling: false)
         store.status = try Contract.decode(Status.self, status)
         store.settings = try Contract.decode(Settings.self, "settings-default.json")
+        store.settings?.kill_switch = killSwitch
         if registered {
             store.registration = try Contract.decode(Registration.self, "registration.json")
             store.devices = try Contract.decode([Device].self, "devices.json")
@@ -142,7 +145,7 @@ final class SnapshotTests: XCTestCase {
         view.environmentObject(store).environmentObject(setup).environmentObject(location())
             .environmentObject(UpdateChecker(fetcher: UpdatesTests.ScriptedReleases(.success(nil)),
                                              defaults: UserDefaults(suiteName: "openwarp.snapshots.\(UUID())")!,
-                                             currentVersion: "0.1.0"))
+                                             currentVersion: "0.1.0", build: nil))
     }
 
     private func setup(_ phase: SetupPhase) -> SetupModel {

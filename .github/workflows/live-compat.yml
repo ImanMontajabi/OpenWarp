@@ -1,0 +1,108 @@
+name: Live compatibility
+
+# Manual only (never scheduled, never on pull requests). Checks OpenWarp against Cloudflare's real WARP
+# service: the daemon runs unprivileged in Local proxy mode (gVisor user-space network stack: no root, no
+# routes, no DNS changes on the runner), connects over MASQUE and/or WireGuard, and fetches
+# https://www.cloudflare.com/cdn-cgi/trace through the SOCKS proxy. A protocol passes only if Cloudflare itself
+# reports warp=on (or plus) for that request.
+#
+# It needs a dedicated TEST registration (never the maintainer's own), stored base64-encoded as the secret
+# OPENWARP_LIVE_STATE of the "live-tests" environment, whose required reviewer approves every run. Without it
+# the job fails with "not configured": nothing is reported as tested. Setup: docs/maintenance-monitoring.md.
+# The job never prints the state, the token, keys, the registration id or the runner's addresses.
+on:
+  workflow_dispatch:
+    inputs:
+      protocols:
+        description: Protocols to test
+        type: choice
+        options: [masque wireguard, masque, wireguard]
+        default: masque wireguard
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: live-compat
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Live compatibility (proxy mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: live-tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Test registration configured
+        env:
+          LIVE_STATE: ${{ secrets.OPENWARP_LIVE_STATE }}
+        run: |
+          if [ -z "$LIVE_STATE" ]; then
+            echo "::error::not configured: the live-tests environment has no OPENWARP_LIVE_STATE secret. Nothing was tested."
+            exit 1
+          fi
+
+      - name: Build
+        run: go build -o "$RUNNER_TEMP/openwarp" ./cmd/openwarp
+
+      - name: Connect and verify through Cloudflare
+        env:
+          LIVE_STATE: ${{ secrets.OPENWARP_LIVE_STATE }}
+          PROTOCOLS: ${{ inputs.protocols }}
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/home" OPENWARP_SOCKET="$RUNNER_TEMP/ow.sock"
+          dir="$HOME/Library/Application Support/openwarp"
+          mkdir -p "$dir" && chmod 700 "$dir"
+          ( umask 077; printf '%s' "$LIVE_STATE" | base64 -d > "$dir/state.json" )
+          ow="$RUNNER_TEMP/openwarp"
+          "$ow" daemon > "$RUNNER_TEMP/daemon.log" 2>&1 &
+          for _ in $(seq 1 50); do "$ow" -j status >/dev/null 2>&1 && break; sleep 0.2; done
+          field() { python3 -I -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1]) or "")' "$1"; }
+          [ "$("$ow" -j status | field registered)" = True ] || { echo "::error::the test state has no registration"; exit 1; }
+          port=40123
+          "$ow" mode proxy >/dev/null
+          "$ow" proxy port "$port" >/dev/null
+          fail=0
+          for proto in $PROTOCOLS; do
+            echo "::group::$proto"
+            "$ow" tunnel protocol set "$proto" >/dev/null
+            "$ow" connect >/dev/null
+            st=""
+            for _ in $(seq 1 90); do st=$("$ow" -j status | field status); [ "$st" = Connected ] && break; sleep 1; done
+            if [ "$st" != Connected ]; then
+              echo "::error::$proto: not connected after 90 s (status: $st; error: $("$ow" -j status | field error | head -c 200))"
+              fail=1
+            else
+              trace=$(curl -sS --max-time 20 -x "socks5h://127.0.0.1:$port" https://www.cloudflare.com/cdn-cgi/trace || true)
+              warp=$(printf '%s\n' "$trace" | sed -n 's/^warp=//p')
+              colo=$(printf '%s\n' "$trace" | sed -n 's/^colo=//p')
+              if [ "$warp" = on ] || [ "$warp" = plus ]; then
+                echo "$proto: Cloudflare reports warp=$warp (colo $colo)"
+                echo "- **$proto**: connected, Cloudflare reports \`warp=$warp\` (colo $colo)" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::error::$proto: connected, but Cloudflare reports warp='${warp:-no answer}'"
+                echo "- **$proto**: connected, but \`warp=${warp:-no answer}\`" >> "$GITHUB_STEP_SUMMARY"
+                fail=1
+              fi
+            fi
+            "$ow" disconnect >/dev/null || true
+            echo "::endgroup::"
+          done
+          exit "$fail"
+
+      # Remove the decoded state before the runner is recycled (it is a disposable VM, but be explicit).
+      - name: Remove the test state
+        if: always()
+        run: rm -rf "${RUNNER_TEMP:?}/home" "${RUNNER_TEMP:?}/daemon.log"

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixture in the shape of blog.cloudflare.com/tag/warp/rss/ -->
+<rss version="2.0"><channel><title>WARP - The Cloudflare Blog</title>
+<item><title>WARP now uses MASQUE for every consumer connection</title><link>https://blog.cloudflare.com/warp-masque-everywhere/</link><pubDate>Fri, 06 Nov 2026 14:00:00 GMT</pubDate><description>We are moving WireGuard users to MASQUE over HTTP/3.</description></item>
+<item><title>A unified data security vision in Cloudflare One</title><link>https://blog.cloudflare.com/unified-data-security/</link><pubDate>Thu, 05 Nov 2026 14:00:00 GMT</pubDate><description>Zero Trust DLP for every endpoint.</description></item>
+<item><title>The history of WARP</title><link>https://blog.cloudflare.com/history-of-warp/</link><pubDate>Wed, 29 Oct 2025 13:00:00 GMT</pubDate><description>How WARP was built.</description></item>
+</channel></rss>

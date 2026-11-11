@@ -297,9 +297,35 @@ func TestEndToEndProxyModeOverMasque(t *testing.T) {
 	if st.Tunnel == nil || st.Tunnel.RxBytes == 0 || st.Proxy == "" {
 		t.Fatalf("stats missing: %s", body)
 	}
+
+	// Verification in proxy mode: the tunnel is up, but without the Cloudflare check nothing proves that
+	// traffic reaches WARP, so the result is "incomplete", never "verified". (The Cloudflare check would
+	// contact the real service, so it is not run here.)
+	code, body := do("POST", "/v1/verify", "")
+	var v Verification
+	json.Unmarshal([]byte(body), &v)
+	if code != 200 || v.Result != "incomplete" || len(v.Checks) == 0 || v.Checks[0].Status != "pass" {
+		t.Fatalf("verify: %d %s", code, body)
+	}
+	_, body = do("GET", "/v1/status", "")
+	st = Status{}
+	json.Unmarshal([]byte(body), &st)
+	if st.Protection.State != ProtUnverified || st.Protection.DNS != "proxy" || st.Protection.Verification == nil {
+		t.Fatalf("protection after verify: %+v", st.Protection)
+	}
+	// The kill switch does not apply to proxy mode: switching it on is reported, and the proxy keeps working.
+	if code, body := do("PATCH", "/v1/settings", `{"kill_switch":true}`); code != 200 {
+		t.Fatalf("kill switch: %s", body)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_, body = do("GET", "/v1/status", "")
+	json.Unmarshal([]byte(body), &st)
+	if st.Status != StatusConnected || st.Protection.KillSwitch != KSUnavailable || st.Protection.KillSwitchDetail == "" {
+		t.Fatalf("kill switch in proxy mode: %s / %+v", st.Status, st.Protection)
+	}
 	t.Logf("status: %s", body)
-	if st.Version != buildinfo.Version {
-		t.Fatalf("status reports version %q, want %q", st.Version, buildinfo.Version)
+	if st.Version != buildinfo.Full() {
+		t.Fatalf("status reports version %q, want %q", st.Version, buildinfo.Full())
 	}
 	// Usage covers the whole connection: equal to the transport's counters so far...
 	if st.Usage == nil || st.Usage.RxBytes != st.Tunnel.RxBytes || st.Usage.TxBytes != st.Tunnel.TxBytes || st.Usage.Since.IsZero() {
