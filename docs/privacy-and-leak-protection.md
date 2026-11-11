@@ -251,9 +251,13 @@ blocked. Then it:
   flow (TCP to 1.1.1.1:443 on the physical interface, stateless) into a temporary anchor of its own that sorts
   after OpenWarp's (the probe must stay blocked), then into one that sorts before it (the positive control: the
   probe must get through, and `openwarp verify` must report that anchor), then empties it again and checks the
-  probe is blocked again. It reports what the main ruleset evaluates before `com.apple/*`, any translation rule
-  with `pass` (which skips filtering), and the rules of every other `com.apple` anchor. No other pf rule is
-  changed;
+  probe is blocked again. pf's own rule counters show whether pf evaluated each test anchor at all: the one
+  after OpenWarp's must never be evaluated, because OpenWarp's anchor ends evaluation for every packet, and the
+  one before it must be. If the positive control fails anyway, the counters show whether the probe's packets
+  matched there. Anchors listed before OpenWarp's fail the check only if they have rules: pf keeps empty
+  anchors, and an empty one cannot end evaluation. It reports what the main ruleset evaluates before
+  `com.apple/*`, any translation rule with `pass` (which skips filtering), and the rules of every other
+  `com.apple` anchor. No other pf rule is changed;
 - captures what leaves the physical interface (anything but the edge, DHCP/ND and the exclusions, and anything
   with the tunnel's inner address) through the rest of the connection and the restart;
 - kills the daemon, probes continuously until launchd has it connected again, and reports how much of the outage

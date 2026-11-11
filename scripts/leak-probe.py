@@ -28,6 +28,7 @@ exactly like an app that binds to the physical network. Exit status 0 means an a
 """
 import ipaddress
 import os
+import re
 import socket
 import ssl
 import struct
@@ -243,6 +244,25 @@ def routes_diff(before, after, tun, prefixes):
     return out
 
 
+def pf_counters(text):
+    """[(rule, evaluations, packets)] from `pfctl -a ANCHOR -v -s rules` output.
+
+    pfctl prints each rule on a line of its own (with -vv prefixed by "@N "), followed by indented lines such
+    as "  [ Evaluations: 12        Packets: 3         Bytes: 180         States: 0     ]".
+    """
+    out = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if not line[0].isspace():
+            out.append([re.sub(r"^@\d+\s+", "", line.strip()), None, None])
+            continue
+        m = re.search(r"Evaluations:\s*(\d+)\s+Packets:\s*(\d+)", line)
+        if m and out:
+            out[-1][1], out[-1][2] = int(m.group(1)), int(m.group(2))
+    return [tuple(r) for r in out]
+
+
 def main(argv):
     cmd = argv[1]
     if cmd in ("tcp", "dns", "ntp"):
@@ -276,6 +296,11 @@ def main(argv):
         return 0
     if cmd == "stream":
         return stream(argv[2], argv[3], argv[4], argv[5])
+    if cmd == "pf-counters":
+        # One line per rule: "EVALUATIONS PACKETS RULE" ("-" when pfctl printed no counters for it).
+        for rule, ev, pk in pf_counters(open(argv[2]).read()):
+            print("%s %s %s" % ("-" if ev is None else ev, "-" if pk is None else pk, rule))
+        return 0
     if cmd == "bytes":
         n, status, end = stream_bytes(argv[2], float(argv[3]), float(argv[4]))
         print(n, status, end)

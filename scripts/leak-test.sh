@@ -47,6 +47,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 PROBE_PY="$HERE/leak-probe.py"
 [ -f "$PROBE_PY" ] || die "missing $PROBE_PY"
 probe() { /usr/bin/python3 -I "$PROBE_PY" "$@"; }
+# Background probes call python3 directly, not the function: then $! is the Python process itself. With the
+# function, $! was a subshell, and killing it left the probe running after the test.
 now() { /usr/bin/python3 -I -c 'import time; print("%.3f" % time.time())'; }
 # calc EXPR: arithmetic on the timestamps above (the operands are numbers this script produced).
 calc() { /usr/bin/python3 -I -c 'import sys; print("%.3f" % eval(sys.argv[1], {"__builtins__": {}, "max": max}))' "$1"; }
@@ -251,7 +253,7 @@ if [ -n "$GW" ]; then
   case " $RESOLVERS " in *" $GW "*) GW_RESOLVER=1;; esac
 fi
 # A download on the physical interface that is already receiving data when the kill switch comes on.
-probe stream "$PHYS" speed.cloudflare.com "$STREAM_URL_PATH" "$WORK/hold.log" &
+/usr/bin/python3 -I "$PROBE_PY" stream "$PHYS" speed.cloudflare.com "$STREAM_URL_PATH" "$WORK/hold.log" &
 HOLD=$!
 sleep 4
 t=$(now)
@@ -286,9 +288,20 @@ check "every kill switch pass rule is stateless" sh -c "! pfctl -a $ANCHOR -s ru
 # pfctl writes "No ALTQ support in kernel" and "ALTQ related functions disabled" to stderr: keep them out.
 pfctl -a com.apple -s Anchors >"$WORK/anchors.txt" 2>"$WORK/anchors.err"
 awk 'NF{a=$1; if (a !~ /^com\.apple\//) a="com.apple/" a; print a}' "$WORK/anchors.txt" >"$WORK/anchors.list"
-first=$(head -1 "$WORK/anchors.list")
 info "com.apple anchors as pf lists them: $(tr '\n' ' ' <"$WORK/anchors.list")"
-if [ "$first" = "$ANCHOR" ]; then ok "$ANCHOR is the first com.apple anchor pf lists"; else bad "the first com.apple anchor is ${first:-none}, not $ANCHOR"; sed 's/^/        /' "$WORK/anchors.txt"; fi
+# An anchor listed before OpenWarp's matters only if it has rules: pf keeps empty anchors (an earlier run of
+# this test leaves its test anchors behind, empty), and an empty one cannot end evaluation. The daemon's own
+# audit (openwarp verify) applies the same rule.
+EARLIER=$(awk -v a="$ANCHOR" '$0 == a {exit} {print}' "$WORK/anchors.list")
+BUSY=; for a in $EARLIER; do anchor_has_rules "$a" && BUSY="$BUSY $a"; done
+if ! grep -qxF "$ANCHOR" "$WORK/anchors.list"; then
+  bad "$ANCHOR is not in pf's list of com.apple anchors"; sed 's/^/        /' "$WORK/anchors.txt"
+elif [ -n "$BUSY" ]; then
+  bad "com.apple anchors with rules are listed before $ANCHOR:$BUSY"; sed 's/^/        /' "$WORK/anchors.txt"
+else
+  ok "no com.apple anchor with rules is listed before $ANCHOR"
+  [ -n "$EARLIER" ] && info "listed before it, without rules: $(printf '%s' "$EARLIER" | tr '\n' ' ')"
+fi
 # The listing alone does not prove the order pf evaluates them in; the test anchors below measure it.
 if LC_ALL=C sort -c "$WORK/anchors.list" 2>/dev/null; then info "the listing is in byte order of the names"; else info "the listing is NOT in byte order of the names"; fi
 # What pf evaluates before the com.apple anchors, and what could skip the filter altogether.
@@ -320,13 +333,44 @@ pass_probe_rules() {
   printf 'pass out quick on %s inet proto tcp from any to 1.1.1.1 port 443 no state\n' "$PHYS"
   printf 'pass in quick on %s inet proto tcp from 1.1.1.1 port 443 to any no state\n' "$PHYS"
 }
+# pf_counters ANCHOR NAME: saves pf's counters for the rules of a test anchor to $WORK/pf-counters.NAME.* and
+# reports them. pf counts an evaluation of an anchor's first rule for every packet that enters the anchor,
+# before any skip step, so FIRST_EVAL (that count, "-" if pfctl printed none) says whether pf evaluated the
+# anchor at all; OUT_PKTS and IN_PKTS are the packets the probe's two rules passed.
+pf_counters() {
+  PFC_ANCHOR=$1; PFC_LIST="$WORK/pf-counters.$2.list"
+  pfctl -a "$1" -vv -s rules >"$WORK/pf-counters.$2.txt" 2>/dev/null
+  probe pf-counters "$WORK/pf-counters.$2.txt" >"$PFC_LIST"
+  while read -r ev pk rule; do info "  pf counters in $PFC_ANCHOR: evaluated $ev, matched $pk packets: $rule"; done <"$PFC_LIST"
+  # shellcheck disable=SC2046 # "evaluations packets" of the first and the second rule (this replaces $1 $2)
+  set -- $(awk 'NR <= 2 {printf "%s %s ", $1, $2}' "$PFC_LIST")
+  FIRST_EVAL=${1:--}; OUT_PKTS=${2:--}; IN_PKTS=${4:--}
+}
 if [ "$C_TCP4" = 1 ]; then
   if pass_probe_rules | pfctl -q -a "$TEST_AFTER" -f - 2>"$WORK/pf-test.err" && anchor_has_rules "$TEST_AFTER"; then
     refuse "a 'pass quick' in an anchor that sorts after the kill switch ($TEST_AFTER) does not get through" probe tcp "$PHYS" 1.1.1.1 443
+    pf_counters "$TEST_AFTER" after
+    # Every packet that enters OpenWarp's anchor ends there ('block drop quick all' comes last), so pf must
+    # never get to an anchor evaluated after it.
+    case $FIRST_EVAL in
+      -) bad "could not read pf's counters for $TEST_AFTER (see $WORK/pf-counters.after.txt)";;
+      0) ok "pf never evaluated $TEST_AFTER: the kill switch ended evaluation before it";;
+      *) bad "pf evaluated $TEST_AFTER $FIRST_EVAL times although the kill switch ends evaluation for every packet: pf does not evaluate the com.apple anchors in the order they are listed";;
+    esac
   else bad "could not load the test anchor $TEST_AFTER: $(cat "$WORK/pf-test.err")"; fi
   pfctl -q -a "$TEST_AFTER" -F all 2>/dev/null
   if pass_probe_rules | pfctl -q -a "$TEST_BEFORE" -f - 2>"$WORK/pf-test.err" && anchor_has_rules "$TEST_BEFORE"; then
     check "positive control: the same rule in an anchor that sorts before it ($TEST_BEFORE) gets through" probe tcp "$PHYS" 1.1.1.1 443
+    pf_counters "$TEST_BEFORE" before
+    case $FIRST_EVAL in
+      -) bad "could not read pf's counters for $TEST_BEFORE (see $WORK/pf-counters.before.txt)";;
+      0) bad "pf never evaluated $TEST_BEFORE although it is listed before $ANCHOR: pf does not evaluate the com.apple anchors in the order they are listed";;
+      *) ok "pf evaluated $TEST_BEFORE ($FIRST_EVAL packets entered it) before the kill switch"
+         # What the positive control's probe met there. Information only: the check above stays as it is.
+         if [ "$OUT_PKTS" = 0 ]; then info "  the probe's SYN never matched the 'pass out' rule (it did not leave on $PHYS as expected)"
+         elif [ "$IN_PKTS" = 0 ]; then info "  pf passed $OUT_PKTS packets out to 1.1.1.1:443 and no reply came in on $PHYS"
+         else info "  pf passed $OUT_PKTS packets out and $IN_PKTS replies in: the probe failed for a reason outside pf's rule order"; fi;;
+    esac
     check "openwarp verify reports the anchor that pf evaluates before the kill switch" \
       sh -c "'$OW' verify 2>&1 | grep -q '0.openwarp-leaktest'"
   else bad "could not load the test anchor $TEST_BEFORE: $(cat "$WORK/pf-test.err")"; fi
@@ -394,7 +438,7 @@ if ! kill -0 "$DUMP" 2>/dev/null || ! kill -0 "$DUMP2" 2>/dev/null; then bad "tc
 # ---------- 3. kill -9, launchd restarts the daemon ----------
 echo "== 3. the daemon dies (kill -9); launchd restarts it"
 # A download through the tunnel while it goes down: its packets carry the tunnel's inner address.
-probe stream - speed.cloudflare.com "$STREAM_URL_PATH" "$WORK/tunflow.log" &
+/usr/bin/python3 -I "$PROBE_PY" stream - speed.cloudflare.com "$STREAM_URL_PATH" "$WORK/tunflow.log" &
 TUNFLOW=$!
 PROBES=""
 [ "$C_TCP4" = 1 ] && PROBES="$PROBES tcp|1.1.1.1|443"
@@ -408,7 +452,7 @@ PID=$(pgrep -f "^$HELPER daemon" | head -1)
 if [ -n "$PID" ] && [ -n "$PROBES" ]; then
   rm -f "$WORK/stop"
   # shellcheck disable=SC2086 # one argument per probe
-  probe watch "$PHYS" "$WORK/stop" "$WORK/watch.log" $PROBES &
+  /usr/bin/python3 -I "$PROBE_PY" watch "$PHYS" "$WORK/stop" "$WORK/watch.log" $PROBES &
   WATCH=$!
   sleep 1
   T_KILL=$(now)

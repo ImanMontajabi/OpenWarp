@@ -106,5 +106,43 @@ class StreamBytes(unittest.TestCase):
         self.assertEqual(probe.stream_bytes(log, 0, 1e12), (0, "403", "http 403"))
 
 
+# `pfctl -a ANCHOR -vv -s rules`, built from macOS 27's /sbin/pfctl format strings ("@%d ",
+# "  [ Evaluations: %-8llu  Packets: %-8llu  Bytes: %-10llu  States: %-6u]", "  [ Inserted: uid %u pid %u ]").
+PF_VV = """@0 pass out quick on en0 inet proto tcp from any to 1.1.1.1 port = 443 no state
+  [ Evaluations: 812       Packets: 3         Bytes: 180         States: 0     ]
+  [ Inserted: uid 0 pid 4242 ]
+@1 pass in quick on en0 inet proto tcp from 1.1.1.1 port = 443 to any no state
+  [ Evaluations: 809       Packets: 0         Bytes: 0           States: 0     ]
+  [ Inserted: uid 0 pid 4242 ]
+"""
+
+
+class PfCounters(unittest.TestCase):
+    def test_counters_per_rule(self):
+        self.assertEqual(probe.pf_counters(PF_VV), [
+            ("pass out quick on en0 inet proto tcp from any to 1.1.1.1 port = 443 no state", 812, 3),
+            ("pass in quick on en0 inet proto tcp from 1.1.1.1 port = 443 to any no state", 809, 0),
+        ])
+
+    def test_never_evaluated(self):
+        out = probe.pf_counters(PF_VV.replace("812 ", "0   ").replace("Packets: 3 ", "Packets: 0 "))
+        self.assertEqual(out[0][1:], (0, 0))
+
+    def test_without_counters(self):
+        # Without -v pfctl prints only the rules: the counts are unknown, never 0.
+        self.assertEqual(probe.pf_counters("pass out quick on en0 all no state\n"),
+                         [("pass out quick on en0 all no state", None, None)])
+        self.assertEqual(probe.pf_counters(""), [])
+
+
+class LeakTestScript(unittest.TestCase):
+    def test_background_probes_are_processes(self):
+        # `probe ... &` backgrounds the shell function: $! is then a subshell, and killing it left the Python
+        # probe running after the test (2026-11-11: the downloads went on for 15 minutes).
+        with open(os.path.join(HERE, "leak-test.sh")) as f:
+            bad = [l.strip() for l in f if l.lstrip().startswith("probe ") and l.rstrip().endswith("&")]
+        self.assertEqual(bad, [])
+
+
 if __name__ == "__main__":
     unittest.main()
