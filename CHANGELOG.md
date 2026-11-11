@@ -11,6 +11,8 @@ All notable changes to OpenWarp are documented here. The format follows
 - The daemon no longer crashes ("index out of range") when Cloudflare answers a key enrollment without a usable
   peer while an endpoint override is set. The answer is rejected with an error and not cached, so the next
   attempt enrolls again.
+- `openwarp status` reads the tunnel's counters once, so `usage` and `tunnel` always agree within one status
+  (they could differ by the packets that arrived between two reads).
 
 ## [0.1.0] - 2026-11-10
 
