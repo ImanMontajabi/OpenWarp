@@ -40,8 +40,9 @@ service govern what Cloudflare records and when it discloses it; OpenWarp has no
 - Correlation by timing and volume between your connection and Cloudflare's edge.
 - Anything an app does on purpose: binding to a specific interface or address, using its own DNS-over-HTTPS
   resolver (that is encrypted and goes through the tunnel like other traffic), or connecting to excluded ranges.
-- Software on the Mac. Any local user can control the daemon through its socket (`/var/run/openwarp.sock`, mode
-  0666, like the official client's), including switching the kill switch off.
+- Software running as an authorized user (root, an administrator, or the user who installed the service) or as
+  root: it can control the daemon, including switching the kill switch off. Other local users can only read the
+  status (see [Who can control the service](#who-can-control-the-service)).
 - Traffic to the split-tunnel exclusions (by default private, link-local and multicast ranges, and a few Apple
   push ranges), which uses the local network by design.
 - Leaks when the kill switch is off: then a dropped tunnel means traffic uses the normal network until it is back.
@@ -55,7 +56,11 @@ service govern what Cloudflare records and when it discloses it; OpenWarp has no
 | Service stopped or upgraded | Same as a crash | Rules are kept while a connection is wanted; `service uninstall` and `openwarp recover` remove them |
 | Tunnel without an IPv6 address | IPv6 kept using the physical network (only IPv4 was routed into the tunnel) | IPv6 outside the exclusions is rejected (`::/1` and `8000::/1` reject routes); apps fall back to IPv4 at once. The kill switch also blocks it |
 | Assigning the tunnel's IPv6 address fails | Only logged; IPv6 leaked | Treated like a tunnel without IPv6: rejected |
-| DNS to the router or other local resolvers | Possible for apps that ask it directly | Blocked by the kill switch in the modes that manage DNS (ports 53 and 853 to the excluded ranges), except to the network's own resolver for the Local Domain Fallback domains in the HTTPS/TLS modes |
+| DNS to the router or other local resolvers | Possible for apps that ask it directly | Blocked by the kill switch in the modes that manage DNS (ports 53 and 853 to the excluded ranges), except to the network's own resolver on the local network for the Local Domain Fallback domains in the HTTPS/TLS modes |
+| DNS to the system's public resolvers, bound to the physical interface | The Local Domain Fallback exception let port 53 through to every system resolver, including public ones such as 8.8.8.8 | The exception covers only resolvers inside the excluded (local) ranges; public resolvers are reached through the tunnel |
+| Connections with a pf state | The kill switch's pass rules kept state. pf states are floating, so after the tunnel dropped, packets of a connection opened through it matched its state on the physical interface and skipped the block rule | Every pass rule is stateless, and loading new rules flushes the state table, so every packet is checked against the current rules |
+| Other pf rules evaluated first | The anchor `com.apple/openwarp` sorted after Apple's (`200.AirDrop`, `250.ApplicationFirewall`); a `pass quick` there won | The anchor is `com.apple/000.openwarp`, evaluated first. Verification fails when a `pass quick` or another anchor comes before `com.apple/*` in the main ruleset, when another `com.apple` anchor sorts first, or when pf skips an interface |
+| Unauthorized local users | Any local user could control the daemon through its socket: switch the kill switch off, change the mode or exclusions, read the registration and license | Each request is authorized from the connecting process's kernel-reported user; others may only read the status |
 | Trusted networks | Pause removes the tunnel | Unchanged, by design: the kill switch is lifted too while paused |
 | Status claims | Status said "Connected" and a DNS protocol label without checking anything | Status reports what was checked: the kill switch state, IPv6 and DNS handling, and the last verification of the current connection |
 
@@ -85,31 +90,65 @@ the DNS-only modes (no tunnel), and with Include split tunnelling. It needs the 
 **Fail closed.** If the kill switch is on but its rules cannot be loaded (pf unavailable, an error from `pfctl`),
 OpenWarp does not connect, and the status says why. Switch the kill switch off to connect without it.
 
-**How it is installed.** The rules live in the pf anchor `com.apple/openwarp`, which macOS's stock `/etc/pf.conf`
-already evaluates through its `anchor "com.apple/*"` line; OpenWarp never edits `/etc/pf.conf`. If that anchor
-point is missing (a customised pf configuration), the kill switch reports that it cannot work instead of loading
-rules that would never be evaluated. pf is enabled with a reference (`pfctl -E`), released when the rules are
-removed (`pfctl -X`), so pf stays enabled for anything else that uses it. While connected the daemon re-checks
-the rules every few seconds and re-enables pf if something disabled it.
+**How it is installed.** The rules live in the pf anchor `com.apple/000.openwarp`, which macOS's stock
+`/etc/pf.conf` already evaluates through its `anchor "com.apple/*"` line; OpenWarp never edits `/etc/pf.conf`.
+pf evaluates the children of that line in name order, so the `000.` prefix puts OpenWarp's rules before Apple's
+own anchors, and every OpenWarp rule is `quick`: nothing evaluated later can override them. If the anchor point is
+missing (a customised pf configuration), the kill switch reports that it cannot work instead of loading rules
+that would never be evaluated. pf is enabled with a reference (`pfctl -E`), released when the rules are removed
+(`pfctl -X`), so pf stays enabled for anything else that uses it. While connected the daemon re-checks the rules
+every few seconds and re-enables pf if something disabled it. (Versions before 0.2 used the anchor
+`com.apple/openwarp`; it is flushed too.)
+
+**No states.** Every pass rule is stateless (`no state`, with a separate rule for replies). pf's states are not
+bound to an interface: a state created while a connection went through the tunnel would also let its packets out
+of the physical interface after the tunnel dropped. Whenever the rules change (turning the kill switch on, each
+reconnect), the state table is flushed, so connections that existed before are checked against the new rules too;
+OpenWarp's own traffic is not interrupted because none of it depends on a state. This also resets states that
+other pf users (such as Internet Sharing) hold, which the kill switch would block anyway.
 
 **Recovering.** If you ever lose your connection and OpenWarp cannot fix it:
 
 ```sh
 openwarp disconnect          # removes the rules (the daemon must be running)
 sudo openwarp recover        # works without the daemon: removes the rules, restores routes and DNS
-sudo pfctl -a com.apple/openwarp -F all    # the rules alone, by hand
+sudo pfctl -a com.apple/000.openwarp -F all    # the rules alone, by hand
 ```
 
 Uninstalling the service (`sudo openwarp service uninstall`) runs the same cleanup.
 
-**Limitations.** pf evaluates other `com.apple/*` anchors (Internet Sharing, AirDrop, the application firewall)
-before OpenWarp's; a `pass quick` rule in one of them is not blocked by the kill switch. Connections that pf was
-already tracking before the rules were loaded (only possible if something else had pf enabled) can continue.
-Local users and malware with access to the control socket can switch it off.
+**Limitations.**
+- Rules in the main pf ruleset before `anchor "com.apple/*"` are evaluated first. The stock configuration has
+  none; verification reports a `pass quick` or an anchor there, but OpenWarp does not edit `/etc/pf.conf` to
+  remove them.
+- pf starts disabled when the Mac boots: until the service has started and loaded its rules, nothing is blocked.
+- The exceptions above are reachable by any app: UDP to Cloudflare's edge ports, TCP 443 to the API fallback
+  addresses, DHCP (an app can use ports 67/68 to any address), and the excluded ranges.
+- Root, administrators and the user who installed the service can switch it off.
 
 **Status: experimental.** The rule generation, the pfctl sequence, the fail-closed logic and the recovery are
-tested offline (the rules are also parsed by the real `pfctl -n` on macOS). The kill switch has not yet been run
-against a live connection on a real Mac. Run `scripts/leak-test.sh` (below) before relying on it.
+tested offline (the rules are also parsed by the real `pfctl -n` on macOS). An earlier version of the kill switch
+passed the first version of `scripts/leak-test.sh` once on one Mac (2026-11-11, warp mode, MASQUE); the current
+rules and the extended test have not been run on a real Mac yet. Run `scripts/leak-test.sh` (below) before
+relying on it.
+
+## Who can control the service
+
+The service's control socket, `/var/run/openwarp.sock`, accepts connections from every local user, because the
+app and the CLI run as the logged-in user. Each request is then authorized from the connecting process's user ID,
+which the macOS kernel reports for the socket (`LOCAL_PEERCRED`) and a client cannot choose:
+
+- any local user may read the status (`openwarp status`, `openwarp service status`);
+- root, members of the `admin` group, and the user who installed the service may do everything else: connect and
+  disconnect, change any setting (including the kill switch, the mode and the split-tunnel lists), verify, and
+  read or change the registration and its license.
+
+`openwarp service install` records the installing user in the LaunchDaemon (`daemon --allow-uid <uid>`): the user
+who ran `sudo`, or, for the app's installer, the user logged in at the console. To hand the service to another
+standard user, run the installer from their account. Refused requests are logged (user and process ID).
+
+A daemon run without root (Local proxy mode) keeps its socket in the user's Application Support folder with mode
+0600 and accepts only that user and root.
 
 ## IPv6
 
@@ -187,10 +226,23 @@ Expect these limits:
 ## Testing on a real Mac
 
 The automated tests never change a machine's networking. `scripts/leak-test.sh` is for an authorised Mac with
-the service installed: it connects with the kill switch, verifies through Cloudflare, tries to send traffic around
-the tunnel, kills the daemon and checks that nothing leaks while launchd restarts it, disconnects, and checks that
-the rules, routes and DNS servers are back to how they were. It refuses to run in CI, without root, or without
-`OPENWARP_LEAK_TEST=I-UNDERSTAND`:
+the service installed. It sends probes bound to the physical interface (`scripts/leak-probe.py`): TCP over IPv4
+and IPv6, DNS over UDP and TCP to Cloudflare and to the router, NTP over UDP, and HTTPS. Each one first runs as a
+positive control before connecting; a probe that does not answer then is reported as skipped rather than as
+blocked. Then it:
+
+- connects with the kill switch and checks that every probe fails, that a download already running on the
+  physical interface is cut, the routes, the anchor order and the stateless rules;
+- captures what leaves the physical interface (anything but the edge, DHCP/ND and the exclusions, and anything
+  with the tunnel's inner address) through the rest of the connection and the restart;
+- kills the daemon, probes continuously until launchd has it connected again, and reports how much of the outage
+  the probes covered;
+- simulates a crash without a restart (a daemon run by hand, killed), checks that traffic stays blocked with no
+  daemon at all, and that `openwarp recover` restores pf (rules, reference, enabled state), the routing table and
+  the DNS servers to their state before the test;
+- disconnects normally and runs the same restoration checks.
+
+It refuses to run in CI, without root, or without `OPENWARP_LEAK_TEST=I-UNDERSTAND`:
 
 ```sh
 sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh
@@ -203,5 +255,6 @@ sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh
 | pf rules, apply/verify/clear | `internal/firewall` | `internal/firewall/*_test.go` (fake pfctl; real `pfctl -n` parse on macOS) |
 | Routes, IPv6 reject, DNS, crash journal | `internal/sysnet` | `internal/sysnet/*_test.go` |
 | Kill switch lifecycle, verification, status | `internal/daemon/protection.go`, `engine.go` | `internal/daemon/protection_test.go`, `e2e_test.go`, `control_test.go` |
+| Control socket authorization | `internal/daemon/access.go`, `peercred_*.go`, `cmd/openwarp/service.go` | `internal/daemon/access_test.go` (real socket, real peer credentials), `cmd/openwarp/service_test.go` |
 | CLI (`killswitch`, `verify`, `recover`) | `cmd/openwarp/main.go` | `cmd/openwarp/cli_test.go`, contract fixtures |
 | App | `ui/macos/Protection.swift` | `ui/macos/Tests/ProtectionTests.swift`, snapshots, UI test |

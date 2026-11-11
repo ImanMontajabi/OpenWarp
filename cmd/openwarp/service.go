@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -79,14 +80,20 @@ func startService() error {
 }
 
 // launchdPlist is the LaunchDaemon definition for a daemon binary at program.
-func launchdPlist(program string) string {
+// launchdPlist is the LaunchDaemon definition. allow are the users (besides root and administrators) who may
+// control the service: the user who installed it.
+func launchdPlist(program string, allow ...uint32) string {
+	args := "<string>" + program + "</string><string>daemon</string>"
+	for _, uid := range allow {
+		args += fmt.Sprintf("<string>--allow-uid</string><string>%d</string>", uid)
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>` + label + `</string>
   <key>ProgramArguments</key>
-  <array><string>` + program + `</string><string>daemon</string></array>
+  <array>` + args + `</array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>/var/log/openwarp.log</string>
@@ -207,7 +214,12 @@ func service(action string) error {
 			return fmt.Errorf("refusing to install the root service: %v", err)
 		}
 		stopService(label)
-		if err := writeAtomic(plistPath, []byte(launchdPlist(helperPath)), 0o644); err != nil {
+		var allow []uint32
+		if uid, ok := installingUser(os.Getenv, consoleUID); ok {
+			allow = append(allow, uid)
+			fmt.Printf("The service can be controlled by root, administrators and user %d.\n", uid)
+		}
+		if err := writeAtomic(plistPath, []byte(launchdPlist(helperPath, allow...)), 0o644); err != nil {
 			return err
 		}
 		installLink()
@@ -232,6 +244,34 @@ func service(action string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown service action %q (install, uninstall or status)", action)
+}
+
+// installingUser is the user on whose behalf `service install` runs: the one who ran sudo, or, for the app's
+// installer (an administrator prompt, which runs as root without SUDO_UID), the user logged in at the
+// console. Root itself is not recorded (it is always allowed).
+func installingUser(getenv func(string) string, console func() (uint32, bool)) (uint32, bool) {
+	if v := getenv("SUDO_UID"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 32); err == nil && n != 0 {
+			return uint32(n), true
+		}
+	}
+	if uid, ok := console(); ok && uid != 0 {
+		return uid, true
+	}
+	return 0, false
+}
+
+// consoleUID is the owner of /dev/console: the user logged in at the screen.
+func consoleUID() (uint32, bool) {
+	fi, err := os.Stat("/dev/console")
+	if err != nil {
+		return 0, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
 }
 
 // ServiceStatus is `openwarp -j service status`: what the app checks before

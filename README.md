@@ -173,9 +173,11 @@ in [SECURITY.md](SECURITY.md).
 - Full-device modes change routes and DNS with `route` and `networksetup` instead of Apple's Network Extension
   framework. If the daemon is killed while connected, it restores routes and DNS when launchd restarts it;
   `sudo openwarp recover` does the same by hand.
-- The kill switch is experimental: its rules and logic are tested offline, but it has not yet been run against a
-  live connection on a real Mac (`scripts/leak-test.sh` does that). If it ever blocks your connection, disconnect
-  or run `sudo openwarp recover`.
+- The kill switch is experimental: its rules and logic are tested offline, and an earlier version passed the
+  live leak test (`scripts/leak-test.sh`) once on one Mac; the current rules have not been run live yet. If it ever
+  blocks your connection, disconnect or run `sudo openwarp recover`.
+- Any local user can read the service's status; only root, administrators and the user who installed the
+  service can control it ([details](docs/privacy-and-leak-protection.md#who-can-control-the-service)).
 - Trusted-network detection by SSID needs Location permission, which OpenWarp does not request yet; the
   Wi-Fi and Ethernet switches work without it.
 - Automatic update checks ask GitHub's API (`api.github.com`) for the latest release once a day while the app

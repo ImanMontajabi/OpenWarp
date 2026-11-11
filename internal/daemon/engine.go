@@ -90,6 +90,8 @@ type Usage struct {
 type Engine struct {
 	store *state.Store
 	api   *api.Client
+	// access is who may use the control socket (access.go); DefaultAccess when nil.
+	access *Access
 
 	mu      sync.Mutex
 	want    bool

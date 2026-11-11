@@ -204,17 +204,33 @@ func (e *Engine) Handler() http.Handler {
 	return mux
 }
 
-// Serve listens on the unix control socket until ctx is cancelled.
+// SetAccess sets who may use the control socket (before Serve).
+func (e *Engine) SetAccess(a Access) { e.access = &a }
+
+// Serve listens on the unix control socket until ctx is cancelled. Every request but the status needs an
+// authorized peer (access.go).
 func (e *Engine) Serve(ctx context.Context, path string) error {
+	access := DefaultAccess()
+	if e.access != nil {
+		access = *e.access
+	}
 	os.Remove(path)
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		return err
 	}
-	// Like the official daemon's IPC socket, any local user may control it.
-	os.Chmod(path, 0o666)
-	srv := &http.Server{Handler: e.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	// The root service's socket is open to every local user, who may read the status; anything else is
+	// authorized per request from the kernel-reported peer credentials. A user daemon's socket is private.
+	mode := os.FileMode(0o600)
+	if os.Geteuid() == 0 {
+		mode = 0o666
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		ln.Close()
+		return err
+	}
+	srv := &http.Server{Handler: access.Wrap(e.Handler()), ConnContext: connContext, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

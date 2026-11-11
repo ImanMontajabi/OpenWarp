@@ -25,18 +25,37 @@ All notable changes to OpenWarp are documented here. The format follows
 - `sudo openwarp recover`: removes the kill switch rules and restores routes and DNS without the daemon.
 - [Privacy and leak protection](docs/privacy-and-leak-protection.md): threat model, what each mode protects,
   the kill switch, verification, and guidance for lawful peer-to-peer use. `scripts/leak-test.sh`: an opt-in,
-  root-only leak test for a real Mac (refuses to run in CI).
+  root-only leak test for a real Mac (refuses to run in CI) with positive controls for every probe (TCP, DNS
+  over UDP/TCP, NTP, IPv4/IPv6), packet captures of the physical interface, outage coverage, a crash without
+  restart plus `openwarp recover`, and checks that pf, routes and DNS are restored.
 
 ### Changed
 
 - The Home page says what a connection does ("Your traffic goes through Cloudflare.", "Your DNS queries are
   encrypted.") instead of "Your Internet is private."
 - Resetting settings keeps the kill switch, like Always On.
+- Kill switch rules are stateless and live in the pf anchor `com.apple/000.openwarp`, which pf evaluates before
+  Apple's own anchors; loading them flushes pf's state table. Verification now also fails when other pf rules are
+  evaluated before the kill switch or pf skips an interface. The old anchor `com.apple/openwarp` is cleaned up.
 - Development builds identify themselves: `./build.sh` stamps the commit into the CLI, the daemon and the app
   (`openwarp --version` prints e.g. `openwarp 0.1.0+dev.1a2b3c4`, with `.dirty` for uncommitted changes; the app
   shows `0.1.0 (dev.1a2b3c4)`). Release builds (`OPENWARP_RELEASE=1`, set only by the release workflows) keep
   the plain version. A development app no longer reports a release service of the same version number, or a
   build of another commit, as up to date.
+
+### Security
+
+- The control socket of the root service no longer lets every local user control it. Requests are authorized
+  from the connecting process's kernel-reported user: any user may read the status; only root, administrators
+  and the user who installed the service (recorded by `service install`) may connect, disconnect, change settings
+  (including the kill switch), verify, or read and change the registration and license. A daemon running without
+  root keeps its socket private (0600) and accepts only its own user.
+- Kill switch: packets of a connection opened through the tunnel could leave through the physical interface
+  after the tunnel dropped, because the pass rules kept (floating) pf states. All pass rules are now stateless
+  and the state table is flushed whenever the rules change.
+- Kill switch: Apple's `com.apple/*` anchors were evaluated before OpenWarp's, so a `pass quick` rule there won.
+- Kill switch: DNS on port 53 to the system's public resolvers (for example 8.8.8.8) was allowed around the
+  tunnel for Local Domain Fallback; only resolvers on the local network are allowed now.
 
 ### Fixed
 

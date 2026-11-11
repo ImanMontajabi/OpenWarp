@@ -144,6 +144,10 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 
 - **Control API** (`internal/daemon/server.go`), socket `/var/run/openwarp.sock` (root) or
   `~/Library/Application Support/openwarp/openwarp.sock`, override with `OPENWARP_SOCKET`:
+  - Authorization (`internal/daemon/access.go`): per request from the peer's kernel credentials (`LOCAL_PEERCRED`).
+    `GET /v1/status` is open to any local user; everything else needs root, the admin group, or a uid passed with
+    `daemon --allow-uid` (`service install` records the installing user: SUDO_UID, else the console owner). The
+    root socket is 0666, a user daemon's 0600 (own uid only). 403 + log line when refused.
   - `GET /v1/status`, `POST /v1/connect|disconnect`
   - `GET|PATCH /v1/settings`, `POST /v1/settings/reset`. PATCH takes a partial JSON object keyed by the
     `state.Settings` json tags and rejects unknown keys.
@@ -160,7 +164,9 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 - **Sessions are rebuilt from scratch** on every reconnect (a new tun per endpoint attempt). A failed
   WireGuard device closes its tun, and `onceTun` guards against a double Close (netstack would panic).
 - **Leak protection** (`internal/daemon/protection.go`, `internal/firewall`, docs/privacy-and-leak-protection.md):
-  - Kill switch = pf rules in anchor `com.apple/openwarp` (`firewall.Rules` renders them; `firewall.PF` loads them
+  - Kill switch = pf rules in anchor `com.apple/000.openwarp` (sorts before Apple's anchors; all rules `quick` and
+    `no state`; a load flushes pf states; the pre-0.2 anchor `com.apple/openwarp` is flushed too). `PF.Verify` also
+    audits what pf evaluates first (`audit`). (`firewall.Rules` renders them; `firewall.PF` loads them
     with `pfctl`, holds a `pfctl -E` reference saved in `<state dir>/pf-token`). `Engine.syncKillSwitch` is the
     one place that decides: rules while `want && KillSwitch && tun mode && exclude split && !paused`, nothing
     otherwise. It runs at the top of every loop iteration, after key enrollment, and after a session is up. It

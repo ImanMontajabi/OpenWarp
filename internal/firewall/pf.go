@@ -39,6 +39,7 @@ type PF struct {
 	mu     sync.Mutex
 	token  string
 	loaded string // the rules currently in the anchor, as loaded by this process
+	legacy bool   // the anchors of earlier versions were flushed
 }
 
 // New returns the macOS pf firewall when the kill switch can work here (darwin, root), keeping its enable
@@ -55,9 +56,10 @@ func New(dir string) (*PF, error) {
 
 var reToken = regexp.MustCompile(`(?m)^Token\s*:\s*([0-9]+)\s*$`)
 
-// Apply loads the policy's rules into the anchor (atomically replacing the previous ones), makes sure pf is
-// enabled, and reads the anchor back to verify the block rule is in place. An unchanged policy is not
-// reloaded, but pf's state is still checked.
+// Apply loads the policy's rules into the anchor (atomically replacing the previous ones), flushes pf's state
+// table so that no connection keeps going on a state created before these rules, makes sure pf is enabled,
+// and reads the anchor back to verify the block rule is in place. An unchanged policy is not reloaded, but
+// pf's state is still checked.
 func (f *PF) Apply(p Policy) error {
 	rules, err := Rules(p)
 	if err != nil {
@@ -82,6 +84,16 @@ func (f *PF) Apply(p Policy) error {
 			return fmt.Errorf("loading the kill switch rules: %w", err)
 		}
 		f.loaded = rules
+		if !f.legacy {
+			f.flushLegacy()
+			f.legacy = true
+		}
+		// States are floating and skip the rules: one created before this ruleset (by an earlier policy, an
+		// older OpenWarp, or another pf user) would keep its connection open outside the tunnel. OpenWarp's
+		// own rules are stateless, so its permitted traffic is not interrupted.
+		if _, err := f.Run("", "pfctl", "-q", "-F", "states"); err != nil {
+			return fmt.Errorf("flushing pf states: %w", err)
+		}
 	}
 	if f.token == "" {
 		f.token = f.readToken()
@@ -118,7 +130,8 @@ func (f *PF) Apply(p Policy) error {
 	return f.verifyLocked()
 }
 
-// Verify checks that the anchor holds a final block rule and that pf is enabled.
+// Verify checks that the anchor holds a final block rule, that pf is enabled, and that nothing in the active
+// pf configuration is evaluated before the kill switch in a way that could let traffic through (see audit).
 func (f *PF) Verify() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -129,7 +142,67 @@ func (f *PF) Verify() error {
 	if !enabled(info) {
 		return errors.New("pf is disabled")
 	}
-	return f.verifyLocked()
+	if err := f.verifyLocked(); err != nil {
+		return err
+	}
+	return f.audit()
+}
+
+// audit looks for configurations that pf evaluates before OpenWarp's anchor, or that exempt traffic from pf
+// altogether:
+//   - rules in the main ruleset before `anchor "com.apple/*"` that end evaluation (`pass ... quick`) or
+//     that call other anchors (whose rules could);
+//   - com.apple/* anchors whose names sort before OpenWarp's (pf evaluates them first);
+//   - interfaces pf skips (`set skip on`), other than loopback.
+//
+// Rules that come later cannot override OpenWarp's: every one of its rules is `quick`.
+func (f *PF) audit() error {
+	var problems []string
+	main, err := f.Run("", "pfctl", "-s", "rules")
+	if err != nil {
+		return fmt.Errorf("reading the pf ruleset: %w", err)
+	}
+	for _, l := range strings.Split(main, "\n") {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, `anchor "com.apple/*"`) {
+			break
+		}
+		if strings.HasPrefix(l, "anchor ") || (strings.HasPrefix(l, "pass") && strings.Contains(l, " quick")) {
+			problems = append(problems, fmt.Sprintf("the main pf ruleset has %q before the com.apple anchors", l))
+		}
+	}
+	anchors, err := f.Run("", "pfctl", "-a", "com.apple", "-s", "Anchors")
+	if err != nil {
+		return fmt.Errorf("listing the com.apple pf anchors: %w", err)
+	}
+	for _, a := range strings.Fields(anchors) {
+		if !strings.HasPrefix(a, "com.apple/") {
+			a = "com.apple/" + a
+		}
+		if a != Anchor && a < Anchor {
+			problems = append(problems, fmt.Sprintf("pf evaluates the anchor %s before the kill switch", a))
+		}
+	}
+	ifs, err := f.Run("", "pfctl", "-s", "Interfaces", "-v")
+	if err != nil {
+		return fmt.Errorf("listing the pf interfaces: %w", err)
+	}
+	for _, l := range strings.Split(ifs, "\n") {
+		if name, _, ok := strings.Cut(strings.TrimSpace(l), " (skip)"); ok && name != "lo0" {
+			problems = append(problems, fmt.Sprintf("pf skips the interface %s (set skip on): its traffic is not filtered", name))
+		}
+	}
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// flushLegacy removes rules an earlier OpenWarp version left in its old anchor.
+func (f *PF) flushLegacy() {
+	for _, a := range LegacyAnchors {
+		f.Run("", "pfctl", "-q", "-a", a, "-F", "all")
+	}
 }
 
 func (f *PF) verifyLocked() error {
@@ -152,6 +225,7 @@ func (f *PF) Clear() error {
 	if _, err := f.Run("", "pfctl", "-q", "-a", Anchor, "-F", "all"); err != nil {
 		errs = append(errs, fmt.Errorf("removing the kill switch rules: %w", err))
 	}
+	f.flushLegacy()
 	f.loaded = ""
 	if f.token == "" {
 		f.token = f.readToken()

@@ -29,6 +29,48 @@ func TestLaunchdPlistRunsTheRootOwnedHelper(t *testing.T) {
 	}
 }
 
+// The service records the installing user, who may then control it without being an administrator. The
+// plist is valid XML that launchd (plutil) accepts, and the daemon's flag parser takes its arguments.
+func TestLaunchdPlistAllowsTheInstallingUser(t *testing.T) {
+	p := launchdPlist(helperPath, 501)
+	if got := plistProgram(p); got != helperPath {
+		t.Fatalf("plist runs %q", got)
+	}
+	if !strings.Contains(p, "<string>daemon</string><string>--allow-uid</string><string>501</string>") {
+		t.Fatalf("installing user missing:\n%s", p)
+	}
+	if _, err := exec.LookPath("plutil"); err == nil {
+		f := filepath.Join(t.TempDir(), "x.plist")
+		os.WriteFile(f, []byte(p), 0o644)
+		if out, err := exec.Command("plutil", "-lint", f).CombinedOutput(); err != nil {
+			t.Fatalf("plutil: %v %s", err, out)
+		}
+	}
+}
+
+func TestInstallingUser(t *testing.T) {
+	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	console := func(uid uint32) func() (uint32, bool) { return func() (uint32, bool) { return uid, true } }
+	for name, tc := range map[string]struct {
+		env     map[string]string
+		console func() (uint32, bool)
+		uid     uint32
+		ok      bool
+	}{
+		"sudo":                       {map[string]string{"SUDO_UID": "502"}, console(501), 502, true},
+		"admin prompt (no SUDO_UID)": {nil, console(501), 501, true},
+		"root at the console":        {nil, console(0), 0, false},
+		"sudo from root":             {map[string]string{"SUDO_UID": "0"}, console(0), 0, false},
+		"garbage SUDO_UID":           {map[string]string{"SUDO_UID": "501; rm -rf /"}, console(503), 503, true},
+		"no console":                 {nil, func() (uint32, bool) { return 0, false }, 0, false},
+	} {
+		uid, ok := installingUser(env(tc.env), tc.console)
+		if uid != tc.uid || ok != tc.ok {
+			t.Errorf("%s: got %d %v, want %d %v", name, uid, ok, tc.uid, tc.ok)
+		}
+	}
+}
+
 func TestPlistProgramOfOlderInstalls(t *testing.T) {
 	if got := plistProgram(launchdPlist("/usr/local/bin/openwarp")); got != "/usr/local/bin/openwarp" {
 		t.Fatalf("got %q", got)

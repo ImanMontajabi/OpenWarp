@@ -3,9 +3,19 @@
 // ports, the API fallback addresses), DHCP and IPv6 neighbour discovery, and the split-tunnel exclusions the
 // user configured.
 //
-// The rules are loaded into the sub-anchor com.apple/openwarp, which macOS's stock /etc/pf.conf evaluates
-// through its `anchor "com.apple/*"` line, so /etc/pf.conf is never edited. pf is enabled with a reference
-// (`pfctl -E`, released with `pfctl -X`), so OpenWarp never turns pf off for anything else that uses it.
+// The rules are loaded into the sub-anchor com.apple/000.openwarp, which macOS's stock /etc/pf.conf evaluates
+// through its `anchor "com.apple/*"` line, so /etc/pf.conf is never edited. pf evaluates the children of a
+// wildcard anchor in name order, so the "000." prefix puts OpenWarp's rules before Apple's own
+// (com.apple/200.AirDrop, com.apple/250.ApplicationFirewall, ...): a `pass quick` there cannot overtake the
+// kill switch. pf is enabled with a reference (`pfctl -E`, released with `pfctl -X`), so OpenWarp never turns
+// pf off for anything else that uses it.
+//
+// Every pass rule is stateless (`no state`, with explicit rules for both directions). pf's states are
+// floating: a state created while a flow went through the tunnel would also match that flow's packets
+// when, after the tunnel dropped, they are routed out of the physical interface, and they would pass without
+// ever reaching the block rule. Without states every packet is checked against the current rules. Loading
+// new rules also flushes the state table (pf.go), so connections that existed before the kill switch (or
+// before a policy change) are re-checked too.
 //
 // Rule generation (this file) is plain Go and tested on every platform. Applying the rules needs root and
 // macOS; see pf.go.
@@ -20,8 +30,11 @@ import (
 	"strings"
 )
 
-// Anchor is the pf anchor that holds OpenWarp's rules.
-const Anchor = "com.apple/openwarp"
+// Anchor is the pf anchor that holds OpenWarp's rules. Its name sorts before every other com.apple/* anchor.
+const Anchor = "com.apple/000.openwarp"
+
+// LegacyAnchors held OpenWarp's rules in earlier versions; they are flushed with the current one.
+var LegacyAnchors = []string{"com.apple/openwarp"}
 
 // Policy is what the kill switch lets through. Everything else is dropped, in both directions, for IPv4
 // and IPv6.
@@ -40,7 +53,9 @@ type Policy struct {
 	// example the router) cannot be used around the tunnel's DNS. Set it in the modes that manage DNS.
 	BlockBypassDNS bool
 	// DNSAllowed are resolvers that may still be reached on port 53 despite BlockBypassDNS: the network's
-	// own resolvers, which the local DNS proxy uses only for the Local Domain Fallback domains.
+	// own resolvers, which the local DNS proxy uses only for the Local Domain Fallback domains. Only those
+	// inside a Bypass prefix are let through: a public resolver is reached through the tunnel anyway, and a
+	// rule for it would let any app query it around the tunnel.
 	DNSAllowed []netip.Addr
 }
 
@@ -60,40 +75,49 @@ func Rules(p Policy) (string, error) {
 	if len(bypass) > 0 {
 		w("table <openwarp_bypass> const { %s }", join(bypass))
 	}
-	dnsOK := uniqAddrs(p.DNSAllowed)
+	var dnsOK []netip.Addr
+	for _, a := range uniqAddrs(p.DNSAllowed) {
+		if slices.ContainsFunc(bypass, func(b netip.Prefix) bool { return b.Contains(a) }) {
+			dnsOK = append(dnsOK, a)
+		}
+	}
 	if p.BlockBypassDNS && len(dnsOK) > 0 && len(bypass) > 0 {
 		w("table <openwarp_dns> const { %s }", join(dnsOK))
 	}
 
-	w("pass quick on lo0 all")
+	// All passes are stateless (see the package comment): a state would outlive the rule that created it.
+	w("pass quick on lo0 all no state")
 	if p.TunnelIface != "" {
-		w("pass quick on %s all", p.TunnelIface)
+		w("pass quick on %s all no state", p.TunnelIface)
 	}
 
-	// The tunnel's own packets to the edge, over the physical interface.
+	// The tunnel's own packets to and from the edge, over the physical interface.
 	for _, g := range groupPorts(p.Edges) {
-		w("pass out quick %s proto udp from any to %s port { %s } keep state", family(g.addr), g.addr, g.ports)
+		w("pass out quick %s proto udp from any to %s port { %s } no state", family(g.addr), g.addr, g.ports)
+		w("pass in quick %s proto udp from %s port { %s } to any no state", family(g.addr), g.addr, g.ports)
 	}
 	for _, a := range uniqAddrs(p.API) {
-		w("pass out quick %s proto tcp from any to %s port 443 flags S/SA keep state", family(a), a)
+		w("pass out quick %s proto tcp from any to %s port 443 no state", family(a), a)
+		w("pass in quick %s proto tcp from %s port 443 to any no state", family(a), a)
 	}
 
 	// Getting and keeping an address on the physical network.
-	w("pass out quick inet proto udp from any port 68 to any port 67 keep state")
-	w("pass in quick inet proto udp from any port 67 to any port 68 keep state")
-	w("pass out quick inet6 proto udp from any port 546 to any port 547 keep state")
-	w("pass in quick inet6 proto udp from any port 547 to any port 546 keep state")
+	w("pass out quick inet proto udp from any port 68 to any port 67 no state")
+	w("pass in quick inet proto udp from any port 67 to any port 68 no state")
+	w("pass out quick inet6 proto udp from any port 546 to any port 547 no state")
+	w("pass in quick inet6 proto udp from any port 547 to any port 546 no state")
 	w("pass quick inet6 proto icmp6 all icmp6-type { 133, 134, 135, 136, 137 } no state")
 
 	if len(bypass) > 0 {
 		if p.BlockBypassDNS {
 			if len(dnsOK) > 0 && len(bypass) > 0 {
-				w("pass out quick proto { tcp, udp } from any to <openwarp_dns> port 53 keep state")
+				w("pass out quick proto { tcp, udp } from any to <openwarp_dns> port 53 no state")
+				w("pass in quick proto { tcp, udp } from <openwarp_dns> port 53 to any no state")
 			}
 			w("block drop quick proto { tcp, udp } from any to <openwarp_bypass> port { 53, 853 }")
 		}
-		w("pass out quick from any to <openwarp_bypass> keep state")
-		w("pass in quick from <openwarp_bypass> to any keep state")
+		w("pass out quick from any to <openwarp_bypass> no state")
+		w("pass in quick from <openwarp_bypass> to any no state")
 	}
 
 	w("block drop quick all")

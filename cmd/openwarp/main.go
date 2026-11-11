@@ -242,6 +242,15 @@ func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	dir := fs.String("state", state.DefaultDir(), "state directory")
 	sock := fs.String("socket", daemon.SocketPath(), "control socket path")
+	access := daemon.DefaultAccess()
+	fs.Func("allow-uid", "also let this user control the daemon (repeatable; `service install` adds the installing user)", func(v string) error {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return fmt.Errorf("not a user ID: %q", v)
+		}
+		access.UIDs = append(access.UIDs, uint32(n))
+		return nil
+	})
 	fs.Parse(args)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	store, err := state.Open(*dir)
@@ -249,9 +258,11 @@ func runDaemon(args []string) error {
 		return err
 	}
 	eng := daemon.NewEngine(store)
+	eng.SetAccess(access)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log.Printf("openwarp daemon %s (state %s, euid %d)", buildinfo.Full(), *dir, os.Geteuid())
+	log.Printf("openwarp daemon %s (state %s, euid %d; control: root%s, users %v)", buildinfo.Full(), *dir, os.Geteuid(),
+		map[bool]string{true: ", administrators", false: ""}[access.Admins], access.UIDs)
 	err = eng.Serve(ctx, *sock)
 	eng.Shutdown()
 	return err
