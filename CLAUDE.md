@@ -22,7 +22,11 @@ Public repo: <https://github.com/ImanMontajabi/OpenWarp> (MIT). `main` is protec
 pushes, force pushes or deletion, and every required CI check must pass. The maintainer is the only reviewer, so
 no approval is required, but every change still goes through a PR.
 
-Branch model: `main` = development (squash merges, merged branches auto-deleted); `release` = shippable, changed
+Branch model (CONTRIBUTING.md "Branches and releases"): `main` and `release` are the only permanent branches.
+Temporary branches are deleted after their PR is merged into `main` and nothing depends on them (GitHub auto-deletes
+the remote; delete the local one too); closed-unmerged or unclear branches are kept until the maintainer decides,
+and no branch is deleted without the maintainer's approval except by that auto-deletion.
+`main` = development (squash merges); `release` = shippable, changed
 only by a PR from `main` (merge commit) that passes `release-candidate.yml`. `release.yml` is run by hand
 (`workflow_dispatch` on `release`, input `version`): it verifies the source and required checks, builds and tests
 the DMG (`scripts/make-dmg.sh`, `verify-dmg.sh`, `ci-install-test.sh`), and creates a **draft** release after
@@ -34,7 +38,9 @@ merge `main` into `release`, tag, or publish a release without the maintainer's 
    fails without the fix. Never skip, disable or weaken a test to get a green build.
 3. Run the local checks (`gofmt -l .`, `go vet ./...`, `go test ./... -race -count=1`, plus the app tests when
    `ui/macos` changes), review the diff, commit, push, open a PR using the template.
-4. Merge (squash) only when every required check is green. Never claim something is tested unless the test ran.
+4. Merge (squash) only when every required check is green **and the maintainer explicitly approved the merge**.
+   Resolve conflicts by merging `main` into the branch (no force pushes). Never claim something is tested unless
+   the test ran.
 5. Update `CHANGELOG.md` under `[Unreleased]` for user-visible changes.
 
 ## Commands
