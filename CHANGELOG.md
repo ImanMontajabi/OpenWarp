@@ -21,6 +21,12 @@ All notable changes to OpenWarp are documented here. The format follows
 - The weekly scheduled run of the Security workflow is replaced by the daily upstream monitor (govulncheck);
   the Security workflow still gates every pull request.
 
+### Fixed
+
+- The daemon no longer crashes ("index out of range") when Cloudflare answers a key enrollment without a usable
+  peer while an endpoint override is set. The answer is rejected with an error and not cached, so the next
+  attempt enrolls again.
+
 ## [0.1.0] - 2026-11-10
 
 First public version (MVP). Release notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).

@@ -253,6 +253,10 @@ func (e *Engine) ensureKey(ctx context.Context, proto state.Protocol, rotate boo
 	if err != nil {
 		return nil, fmt.Errorf("enrolling %s key: %w", keyType, err)
 	}
+	// Never cache an answer the tunnel cannot use: the next attempt enrolls again.
+	if err := usablePeer(&upd.Config); err != nil {
+		return nil, fmt.Errorf("enrolling %s key: %w", keyType, err)
+	}
 	s.Lock()
 	defer s.Unlock()
 	cfg := upd.Config
@@ -730,7 +734,18 @@ func parsePrefix(s string) (netip.Prefix, error) {
 	return netip.PrefixFrom(a, a.BitLen()), nil
 }
 
+// usablePeer reports whether cfg names an edge peer with a public key, which every transport needs.
+func usablePeer(cfg *api.Config) error {
+	if len(cfg.Peers) == 0 || cfg.Peers[0].PublicKey == "" {
+		return errors.New("API response has no usable peer (no peers or no peer public key)")
+	}
+	return nil
+}
+
 func (e *Engine) newTransport(set state.Settings, cfg *api.Config) (tunnel.Transport, error) {
+	if err := usablePeer(cfg); err != nil {
+		return nil, err
+	}
 	e.store.Lock()
 	defer e.store.Unlock()
 	peer := cfg.Peers[0]
