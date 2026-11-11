@@ -217,7 +217,15 @@ type fakePF struct {
 	flushes   int // state table flushes
 	// states: connections with a pf state; a flush removes them.
 	states int
+	// altq: pfctl prints its "No ALTQ support" notes (stderr) before the answers, as on a stock Mac.
+	altq bool
+	// junk: an unexpected line in the anchor listing.
+	junk string
+	// empty: anchors in the listing that hold no rules.
+	empty map[string]bool
 }
+
+const altqNotes = "No ALTQ support in kernel\nALTQ related functions disabled\n"
 
 func newFake() *fakePF {
 	return &fakePF{stock: true, refs: map[string]bool{}, next: 100,
@@ -225,6 +233,14 @@ func newFake() *fakePF {
 }
 
 func (f *fakePF) run(stdin, name string, args ...string) (string, error) {
+	out, err := f.answer(stdin, name, args...)
+	if f.altq && name == "pfctl" && slices.Contains(args, "-s") {
+		out = altqNotes + out
+	}
+	return out, err
+}
+
+func (f *fakePF) answer(stdin, name string, args ...string) (string, error) {
 	cmd := strings.Join(append([]string{name}, args...), " ")
 	f.calls = append(f.calls, cmd)
 	switch cmd {
@@ -243,7 +259,7 @@ func (f *fakePF) run(stdin, name string, args ...string) (string, error) {
 		}()...) {
 			out += "  " + a + "\n"
 		}
-		return out, nil
+		return out + f.junk, nil
 	case "pfctl -s Interfaces -v":
 		out := "lo0 (skip)\nen0\nutun3\n"
 		for _, i := range f.skip {
@@ -287,6 +303,12 @@ func (f *fakePF) run(stdin, name string, args ...string) (string, error) {
 	case "pfctl -q -a " + Anchor + " -F all":
 		f.anchor = ""
 		return "", nil
+	}
+	if name == "pfctl" && len(args) == 4 && args[0] == "-a" && args[2] == "-s" && args[3] == "rules" && slices.Contains(f.anchors, args[1]) {
+		if f.empty[args[1]] {
+			return "", nil
+		}
+		return "pass out quick all no state\n", nil
 	}
 	if name == "pfctl" && len(args) == 2 && args[0] == "-X" {
 		if !f.refs[args[1]] {
@@ -488,6 +510,8 @@ func TestPFVerifyAuditsEvaluationOrder(t *testing.T) {
 		"another anchor before":              {func(fk *fakePF) { fk.before = "anchor \"littlesnitch/*\" all\n" }, "main pf ruleset"},
 		"com.apple anchor sorting first":     {func(fk *fakePF) { fk.anchors = append(fk.anchors, "com.apple/000.aaa") }, "000.aaa"},
 		"skipped interface":                  {func(fk *fakePF) { fk.skip = []string{"en0"} }, "skips the interface en0"},
+		"anchor first, with ALTQ notes":      {func(fk *fakePF) { fk.altq = true; fk.anchors = append(fk.anchors, "com.apple/0.test") }, "0.test"},
+		"unreadable anchor listing":          {func(fk *fakePF) { fk.junk = "pfctl: something unexpected\n" }, "unexpected output"},
 	} {
 		fk, f := setup()
 		tc.mutate(fk)
@@ -495,8 +519,22 @@ func TestPFVerifyAuditsEvaluationOrder(t *testing.T) {
 			t.Errorf("%s: Verify = %v, want an error about %q", name, err, tc.want)
 		}
 	}
-	// A non-quick rule before the anchor point cannot override OpenWarp's quick rules.
+	// pfctl's ALTQ notes are not anchors or rules (the leak test once read "No" as the first anchor).
 	fk, f := setup()
+	fk.altq = true
+	fk.anchors = append(fk.anchors, "com.apple/rat")
+	if err := f.Verify(); err != nil {
+		t.Fatalf("ALTQ notes and a later anchor reported: %v", err)
+	}
+	// An anchor sorting first without rules (flushed, still listed) lets nothing through.
+	fk, f = setup()
+	fk.anchors = append(fk.anchors, "com.apple/0.test")
+	fk.empty = map[string]bool{"com.apple/0.test": true}
+	if err := f.Verify(); err != nil {
+		t.Fatalf("an empty earlier anchor reported: %v", err)
+	}
+	// A non-quick rule before the anchor point cannot override OpenWarp's quick rules.
+	fk, f = setup()
 	fk.before = "pass in all\nblock in on en0 proto tcp to port 22\n"
 	if err := f.Verify(); err != nil {
 		t.Fatalf("harmless rules reported: %v", err)

@@ -28,7 +28,10 @@ All notable changes to OpenWarp are documented here. The format follows
   root-only leak test for a real Mac (refuses to run in CI or while another VPN is connected; restores the
   previous settings on any exit) with positive controls for every probe (TCP, DNS
   over UDP/TCP, NTP, IPv4/IPv6), packet captures of the physical interface, outage coverage, a crash without
-  restart plus `openwarp recover`, and checks that pf, routes and DNS are restored.
+  restart plus `openwarp recover`, and checks that pf, routes and DNS are restored. It measures pf's evaluation
+  order with temporary test anchors of its own (one sorting after the kill switch, one before as the positive
+  control), uses a download that must be receiving data as the control for the already-open connection check,
+  records every route change, and never counts a route difference at a destination OpenWarp manages as transient.
 
 ### Changed
 
@@ -63,6 +66,16 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ### Fixed
 
+- Disconnecting (and `openwarp recover`) could delete routes that were not OpenWarp's, such as macOS's own
+  `169.254` link-local route, which then stayed missing until the network changed. macOS's `route` command exits
+  with status 0 even when the kernel refuses a change, so a split-tunnel route whose destination already had a
+  route was recorded as added. OpenWarp now reads the outcome from `route`'s output and, before deleting a route,
+  checks that the route at that destination is still the one it added.
+- `sudo openwarp service install` returned as soon as launchd had loaded the service, before the daemon listened
+  on its socket, so a command right after it could fail with "connection refused". It now waits (at most 15 s)
+  until the new daemon answers, and says so when it does not.
+- Verification read pfctl's "No ALTQ support in kernel" notes as anchor names. They are ignored now, any other
+  unexpected output fails the check, and an empty anchor that sorts before the kill switch is no longer reported.
 - IPv6 leaked outside the tunnel when the tunnel had no IPv6 address or assigning it failed; it is now rejected
   (apps fall back to IPv4).
 - After the daemon was killed while connected, its routes and DNS servers stayed behind (in the HTTPS/TLS modes

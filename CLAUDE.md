@@ -179,7 +179,9 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
     fails closed (the loop does not connect when it errors). Lock order: `ksMu` before `mu`, never the reverse.
   - Shutdown keeps the rules when a connection is wanted; startup clears them unless AlwaysOn + kill switch.
   - `sysnet` journals route/DNS changes (`<state dir>/network-journal.json`, root only) and `Recover` undoes them
-    at startup; no IPv6 in the tunnel ⇒ `::/1` and `8000::/1` reject routes.
+    at startup; no IPv6 in the tunnel ⇒ `::/1` and `8000::/1` reject routes. Only routes `route` really added are
+    journaled ("File exists" = not ours), and `Undo` deletes one only after `route -n get` shows it is still ours
+    (`internal/sysnet/route_darwin.go`; the kernel deletes by destination and mask, whatever the gateway).
   - `Engine.Verify` checks routes/DNS/kill switch through the `Probe` interface (fakes in tests) and only with
     `cloudflare` fetches the trace. `Status.Protection` never says verified without a passing check of the
     current session.
@@ -234,7 +236,9 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 
 **Not yet verified (need root; test these first when touching them):**
 - The kill switch on a live connection (pf anchor load, `pfctl -E/-X`, blocking during reconnect and after
-  `kill -9`), the IPv6 reject routes, and journal recovery. Offline: fake `pfctl`, plus `pfctl -n` parsing of
+  `kill -9`), the IPv6 reject routes, and journal recovery. One run of the extended leak test on 2026-11-11
+  (`0.1.0+dev.c5f025d`, one Apple silicon Mac, Wi-Fi): 49 passed, 3 failed, 1 skipped, no probe got around the
+  tunnel; the failures led to the route-ownership and ALTQ fixes and are not re-run yet. Offline: fake `pfctl`, plus `pfctl -n` parsing of
   the generated rules. Run `sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh` (asks nothing, changes
   networking; only with the user's go-ahead).
 - `warp` / `warp+doh` / `warp+dot` / `tunnel_only` modes: utun address setup, split routes, endpoint host
@@ -286,6 +290,11 @@ The project folder on disk may still be named `cwarp`; nothing depends on that n
 - New tests must stay offline. Use the mock API and mock edge in `internal/daemon/e2e_test.go` and
   `internal/tunnel/*_test.go`, the fake daemon in `cmd/openwarp/cli_test.go`, or the control-API harness in
   `internal/daemon/control_test.go`.
+- macOS's `route` exits **0** even when the kernel refuses (`File exists`, `not in table`): read its output
+  (`sysnet.routeResult`), never just the exit status. Tests replace `sysnet.runCmd` (`route_darwin_test.go` has a
+  fake routing table with the kernel's semantics).
+- pfctl writes "No ALTQ support in kernel" / "ALTQ related functions disabled" to stderr; `firewall.pfLines`
+  drops them from the combined output.
 - **Never** create, delete or modify real Cloudflare registrations, or run root/network-changing commands
   (`sudo`, `service install`, `route`, `networksetup`), without asking the user first.
 - The user's own registration lives in `~/Library/Application Support/openwarp/state.json`. Don't print the

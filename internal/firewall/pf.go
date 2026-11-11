@@ -152,7 +152,7 @@ func (f *PF) Verify() error {
 // altogether:
 //   - rules in the main ruleset before `anchor "com.apple/*"` that end evaluation (`pass ... quick`) or
 //     that call other anchors (whose rules could);
-//   - com.apple/* anchors whose names sort before OpenWarp's (pf evaluates them first);
+//   - com.apple/* anchors whose names sort before OpenWarp's (pf evaluates them first) and that hold rules;
 //   - interfaces pf skips (`set skip on`), other than loopback.
 //
 // Rules that come later cannot override OpenWarp's: every one of its rules is `quick`.
@@ -162,8 +162,7 @@ func (f *PF) audit() error {
 	if err != nil {
 		return fmt.Errorf("reading the pf ruleset: %w", err)
 	}
-	for _, l := range strings.Split(main, "\n") {
-		l = strings.TrimSpace(l)
+	for _, l := range pfLines(main) {
 		if strings.HasPrefix(l, `anchor "com.apple/*"`) {
 			break
 		}
@@ -175,20 +174,31 @@ func (f *PF) audit() error {
 	if err != nil {
 		return fmt.Errorf("listing the com.apple pf anchors: %w", err)
 	}
-	for _, a := range strings.Fields(anchors) {
+	for _, a := range pfLines(anchors) {
+		if !reAnchorName.MatchString(a) {
+			problems = append(problems, fmt.Sprintf("unexpected output listing the com.apple pf anchors: %q", a))
+			continue
+		}
 		if !strings.HasPrefix(a, "com.apple/") {
 			a = "com.apple/" + a
 		}
-		if a != Anchor && a < Anchor {
-			problems = append(problems, fmt.Sprintf("pf evaluates the anchor %s before the kill switch", a))
+		// pf keeps the children of an anchor in a tree ordered by strcmp of their paths and evaluates a
+		// wildcard anchor's children in that order; Go compares strings bytewise, the same order.
+		if a == Anchor || a > Anchor {
+			continue
 		}
+		// An empty anchor (for example one whose rules were flushed, which pf may keep listed) passes nothing.
+		if rules, err := f.Run("", "pfctl", "-a", a, "-s", "rules"); err == nil && len(pfLines(rules)) == 0 {
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("pf evaluates the anchor %s before the kill switch", a))
 	}
 	ifs, err := f.Run("", "pfctl", "-s", "Interfaces", "-v")
 	if err != nil {
 		return fmt.Errorf("listing the pf interfaces: %w", err)
 	}
-	for _, l := range strings.Split(ifs, "\n") {
-		if name, _, ok := strings.Cut(strings.TrimSpace(l), " (skip)"); ok && name != "lo0" {
+	for _, l := range pfLines(ifs) {
+		if name, _, ok := strings.Cut(l, " (skip)"); ok && name != "lo0" {
 			problems = append(problems, fmt.Sprintf("pf skips the interface %s (set skip on): its traffic is not filtered", name))
 		}
 	}
@@ -196,6 +206,26 @@ func (f *PF) audit() error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// pfctl's diagnostics on a kernel without ALTQ. pfctl writes them to stderr before the answer of most -s
+// commands, and the runner returns stdout and stderr together.
+var pfNotes = map[string]bool{
+	"No ALTQ support in kernel":       true,
+	"ALTQ related functions disabled": true,
+}
+
+var reAnchorName = regexp.MustCompile(`^[A-Za-z0-9_.\-/]+$`)
+
+// pfLines splits pfctl output into trimmed, non-empty lines without pfctl's ALTQ diagnostics.
+func pfLines(out string) []string {
+	var ls []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !pfNotes[l] {
+			ls = append(ls, l)
+		}
+	}
+	return ls
 }
 
 // flushLegacy removes rules an earlier OpenWarp version left in its old anchor.

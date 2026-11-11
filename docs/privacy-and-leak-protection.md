@@ -59,7 +59,8 @@ service govern what Cloudflare records and when it discloses it; OpenWarp has no
 | DNS to the router or other local resolvers | Possible for apps that ask it directly | Blocked by the kill switch in the modes that manage DNS (ports 53 and 853 to the excluded ranges), except to the network's own resolver on the local network for the Local Domain Fallback domains in the HTTPS/TLS modes |
 | DNS to the system's public resolvers, bound to the physical interface | The Local Domain Fallback exception let port 53 through to every system resolver, including public ones such as 8.8.8.8 | The exception covers only resolvers inside the excluded (local) ranges; public resolvers are reached through the tunnel |
 | Connections with a pf state | The kill switch's pass rules kept state. pf states are floating, so after the tunnel dropped, packets of a connection opened through it matched its state on the physical interface and skipped the block rule | Every pass rule is stateless, and loading new rules flushes the state table, so every packet is checked against the current rules |
-| Other pf rules evaluated first | The anchor `com.apple/openwarp` sorted after Apple's (`200.AirDrop`, `250.ApplicationFirewall`); a `pass quick` there won | The anchor is `com.apple/000.openwarp`, evaluated first. Verification fails when a `pass quick` or another anchor comes before `com.apple/*` in the main ruleset, when another `com.apple` anchor sorts first, or when pf skips an interface |
+| Other pf rules evaluated first | The anchor `com.apple/openwarp` sorted after Apple's (`200.AirDrop`, `250.ApplicationFirewall`); a `pass quick` there won | The anchor is `com.apple/000.openwarp`, evaluated first. Verification fails when a `pass quick` or another anchor comes before `com.apple/*` in the main ruleset, when another `com.apple` anchor with rules sorts first, or when pf skips an interface |
+| Routes left after disconnecting | — | macOS's `route` exits with status 0 even when the kernel refuses a change. A split-tunnel route whose destination already had a route (macOS's `169.254` link-local route) was taken as added, and deleting it on disconnect or `recover` removed macOS's own route (no leak: link-local traffic then followed the default route). Failures are now read from `route`'s output, and a route is deleted only while it is still the one OpenWarp added |
 | Unauthorized local users | Any local user could control the daemon through its socket: switch the kill switch off, change the mode or exclusions, read the registration and license | Each request is authorized from the connecting process's kernel-reported user; others may only read the status |
 | Trusted networks | Pause removes the tunnel | Unchanged, by design: the kill switch is lifted too while paused |
 | Status claims | Status said "Connected" and a DNS protocol label without checking anything | Status reports what was checked: the kill switch state, IPv6 and DNS handling, and the last verification of the current connection |
@@ -125,12 +126,25 @@ Uninstalling the service (`sudo openwarp service uninstall`) runs the same clean
 - The exceptions above are reachable by any app: UDP to Cloudflare's edge ports, TCP 443 to the API fallback
   addresses, DHCP (an app can use ports 67/68 to any address), and the excluded ranges.
 - Root, administrators and the user who installed the service can switch it off.
+- **Other pf firewalls do not see the traffic the kill switch lets through.** Its `quick` rules end pf's
+  evaluation for every packet: the ones it blocks, and also loopback, tunnel and excluded-range traffic, which it
+  passes. Rules in anchors evaluated after it (Apple's, or another program's such as `com.apple/rat`) are then
+  never reached for that traffic, so their blocks do not apply while the kill switch is on. Nothing those rules
+  pass can get around the kill switch either. Turning the passes into non-`quick` rules would let later rules
+  block again, but a later stateful `pass` would then create pf states, which outlive the tunnel (see "No
+  states"); this needs its own design and test before it changes.
+- Rules in an anchor that sorts before `000.openwarp` (in `com.apple`) would be evaluated first. Verification
+  reports such an anchor when it holds rules.
 
 **Status: experimental.** The rule generation, the pfctl sequence, the fail-closed logic and the recovery are
 tested offline (the rules are also parsed by the real `pfctl -n` on macOS). An earlier version of the kill switch
-passed the first version of `scripts/leak-test.sh` once on one Mac (2026-11-11, warp mode, MASQUE); the current
-rules and the extended test have not been run on a real Mac yet. Run `scripts/leak-test.sh` (below) before
-relying on it.
+passed the first version of `scripts/leak-test.sh` once on one Mac (2026-11-11, warp mode, MASQUE). The current
+rules ran through the extended test once on one Apple silicon Mac (2026-11-11, `0.1.0+dev.c5f025d`, Wi-Fi, warp
+mode, MASQUE): no probe got around the tunnel, including 29 probes over the 12.8 s of a daemon kill and restart;
+3 checks failed, all explained (the leak test misread pfctl's ALTQ notes as an anchor name; OpenWarp removed
+macOS's own `169.254` link-local route on disconnect and recover, fixed since; see the CHANGELOG), and the
+already-running download check was skipped because its download never started. The fixed version has not been
+run on a real Mac yet. Run `scripts/leak-test.sh` (below) before relying on it.
 
 ## Who can control the service
 
@@ -231,8 +245,15 @@ and IPv6, DNS over UDP and TCP to Cloudflare and to the router, NTP over UDP, an
 positive control before connecting; a probe that does not answer then is reported as skipped rather than as
 blocked. Then it:
 
-- connects with the kill switch and checks that every probe fails, that a download already running on the
-  physical interface is cut, the routes, the anchor order and the stateless rules;
+- connects with the kill switch and checks that every probe fails, that a download already receiving data on the
+  physical interface receives nothing more, the routes, the anchor order and the stateless rules;
+- measures pf's evaluation order instead of trusting the anchor listing: it loads a `pass quick` for one probe
+  flow (TCP to 1.1.1.1:443 on the physical interface, stateless) into a temporary anchor of its own that sorts
+  after OpenWarp's (the probe must stay blocked), then into one that sorts before it (the positive control: the
+  probe must get through, and `openwarp verify` must report that anchor), then empties it again and checks the
+  probe is blocked again. It reports what the main ruleset evaluates before `com.apple/*`, any translation rule
+  with `pass` (which skips filtering), and the rules of every other `com.apple` anchor. No other pf rule is
+  changed;
 - captures what leaves the physical interface (anything but the edge, DHCP/ND and the exclusions, and anything
   with the tunnel's inner address) through the rest of the connection and the restart;
 - kills the daemon, probes continuously until launchd has it connected again, and reports how much of the outage
@@ -241,6 +262,14 @@ blocked. Then it:
   daemon at all, and that `openwarp recover` restores pf (rules, reference, enabled state), the routing table and
   the DNS servers to their state before the test;
 - disconnects normally and runs the same restoration checks.
+
+The routing-table comparison never accepts a difference at a destination OpenWarp's route commands touch (the
+split-tunnel list, the tunnel's halves and reject routes, edge host routes, routes on one of its tunnels). Other
+differences get 15 s, because macOS changes some routes by itself, and still fail if they stay; every routing
+message during the test is recorded (`route -n monitor`) to show when each change happened. A check whose
+scenario did not happen (a download that never received data, no traffic through the tunnel during the
+restart) is skipped, not passed. At the end, the work directory with the captures and logs is handed to the
+user who ran `sudo`.
 
 It refuses to run in CI, without root, without `OPENWARP_LEAK_TEST=I-UNDERSTAND`, or while another VPN (the
 official Cloudflare WARP client included) is connected. It prints the version of the service it tests, and it puts

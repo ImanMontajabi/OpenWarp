@@ -224,6 +224,39 @@ func TestServiceStatus(t *testing.T) {
 	}
 }
 
+// `service install` returns only once the new daemon answers on its socket, within a bounded time.
+func TestWaitReady(t *testing.T) {
+	refused := errors.New("dial unix /var/run/openwarp.sock: connect: connection refused")
+	var slept time.Duration
+	sleep := func(d time.Duration) { slept += d }
+	answers := []func() (daemon.Status, error){
+		func() (daemon.Status, error) { return daemon.Status{}, refused },
+		func() (daemon.Status, error) { return daemon.Status{Version: "0.0.9"}, nil }, // the old daemon, still up
+		func() (daemon.Status, error) { return daemon.Status{Version: "0.1.0"}, nil },
+	}
+	i := 0
+	status := func() (daemon.Status, error) { a := answers[min(i, len(answers)-1)]; i++; return a() }
+	if err := waitReady(status, "0.1.0", 15*time.Second, sleep); err != nil {
+		t.Fatalf("ready daemon: %v", err)
+	}
+	if i != 3 || slept != 2*readyPoll {
+		t.Fatalf("polled %d times, slept %s", i, slept)
+	}
+
+	slept = 0
+	err := waitReady(func() (daemon.Status, error) { return daemon.Status{}, refused }, "0.1.0", 2*time.Second, sleep)
+	if err == nil || !strings.Contains(err.Error(), "connection refused") || !strings.Contains(err.Error(), "within 2s") {
+		t.Fatalf("never ready: %v", err)
+	}
+	if slept != 2*time.Second {
+		t.Fatalf("gave up after %s, want the whole 2s", slept)
+	}
+	err = waitReady(func() (daemon.Status, error) { return daemon.Status{Version: "0.0.9"}, nil }, "0.1.0", time.Second, sleep)
+	if err == nil || !strings.Contains(err.Error(), "version 0.0.9 instead of 0.1.0") {
+		t.Fatalf("old version: %v", err)
+	}
+}
+
 // A development build is never "up to date" with a release service of the same version number, or with a
 // development build of another commit, so the app offers to install its own CLI.
 func TestServiceStatusTellsDevelopmentBuildsApart(t *testing.T) {
@@ -318,5 +351,17 @@ func TestLeakTestScriptRefusesWithoutOptIn(t *testing.T) {
 		if out, code := run(); code != 2 || (!strings.Contains(out, "run with sudo") && !strings.Contains(out, "macOS only")) {
 			t.Errorf("no opt-in: exit %d, %q", code, out)
 		}
+	}
+}
+
+// The leak test's helpers (route-table diff, stream byte counts, netstat prefixes) are tested offline.
+func TestLeakProbeHelpers(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not installed")
+	}
+	out, err := exec.Command(py, "-I", filepath.Join("..", "..", "scripts", "leak-probe-test.py")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("scripts/leak-probe-test.py: %v\n%s", err, out)
 	}
 }

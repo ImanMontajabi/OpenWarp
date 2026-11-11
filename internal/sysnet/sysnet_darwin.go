@@ -44,7 +44,10 @@ const (
 	IPv6System  = "system"  // include mode: IPv6 outside the included ranges uses the physical network
 )
 
-func run(name string, args ...string) (string, error) {
+// run executes a command and returns its combined output. Tests replace runCmd.
+func run(name string, args ...string) (string, error) { return runCmd(name, args...) }
+
+var runCmd = func(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, bytes.TrimSpace(out))
@@ -92,6 +95,7 @@ func gwArg(g Gateway) string {
 type Applied struct {
 	mu      sync.Mutex
 	routes  [][]string // "route" args to delete
+	kept    []string   // destinations that already had a route, left alone
 	dns     map[string][]string
 	journal string
 	ipv6    string
@@ -163,9 +167,14 @@ func Apply(c TunConfig) (*Applied, error) {
 			args = append(args, via)
 		}
 		args = append(args, extra...)
-		if _, err := run("route", args...); err != nil {
-			// "File exists": an equivalent route already exists.
-			if !strings.Contains(err.Error(), "File exists") {
+		if err := runRoute(args...); err != nil {
+			// A route for this destination already exists (macOS's own link-local, broadcast or LAN route, or
+			// another program's): it is not ours, so it is neither recorded nor ever deleted by Undo.
+			if errors.Is(err, errRouteExists) {
+				a.mu.Lock()
+				a.kept = append(a.kept, prefix.String())
+				a.mu.Unlock()
+			} else {
 				log.Printf("sysnet: %v", err)
 			}
 			return
@@ -222,6 +231,12 @@ func Apply(c TunConfig) (*Applied, error) {
 		}
 	}
 	a.save()
+	a.mu.Lock()
+	if len(a.kept) > 0 {
+		log.Printf("sysnet: added %d routes; %d destinations already had a route, left alone: %s",
+			len(a.routes), len(a.kept), strings.Join(a.kept, ", "))
+	}
+	a.mu.Unlock()
 	return a, nil
 }
 
@@ -275,8 +290,16 @@ func (a *Applied) Undo() {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	var skipped []string
 	for i := len(a.routes) - 1; i >= 0; i-- {
-		run("route", a.routes[i]...)
+		if why := notOurs(a.routes[i]); why != "" {
+			skipped = append(skipped, why)
+			continue
+		}
+		runRoute(a.routes[i]...)
+	}
+	if len(skipped) > 0 {
+		log.Printf("sysnet: left %d routes alone that are no longer OpenWarp's: %s", len(skipped), strings.Join(skipped, "; "))
 	}
 	a.routes = nil
 	for svc, prev := range a.dns {
@@ -339,11 +362,15 @@ func RouteTo(dst netip.Addr) (r Route, ok bool, err error) {
 		args = []string{"-n", "get", "-inet6", dst.String()}
 	}
 	out, err := run("route", args...)
+	// macOS's route exits 0 when the lookup fails; only its output says so.
+	if strings.Contains(out, "not in table") || (err != nil && strings.Contains(err.Error(), "not in table")) {
+		return Route{}, false, nil
+	}
 	if err != nil {
-		if strings.Contains(out, "not in table") || strings.Contains(err.Error(), "not in table") {
-			return Route{}, false, nil
-		}
 		return Route{}, false, err
+	}
+	if rerr := routeResult(out); rerr != nil {
+		return Route{}, false, fmt.Errorf("route %s: %w", strings.Join(args, " "), rerr)
 	}
 	return parseRoute(out), true, nil
 }

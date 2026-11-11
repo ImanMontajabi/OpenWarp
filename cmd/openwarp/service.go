@@ -226,6 +226,11 @@ func service(action string) error {
 		if err := startService(); err != nil {
 			return err
 		}
+		// launchctl returns once the job is loaded, before the daemon listens on its socket: a command run
+		// right after an install that returned at that point failed with "connection refused".
+		if err := waitReady(daemonStatus, buildinfo.Full(), readyTimeout, time.Sleep); err != nil {
+			return fmt.Errorf("installed and started %s, but %v (logs: /var/log/openwarp.log)", label, err)
+		}
 		fmt.Println("Installed and started", label, "(logs: /var/log/openwarp.log)")
 		return nil
 	case "uninstall":
@@ -244,6 +249,38 @@ func service(action string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown service action %q (install, uninstall or status)", action)
+}
+
+// readyTimeout bounds how long `service install` waits for the new daemon to answer.
+const readyTimeout = 15 * time.Second
+
+const readyPoll = 250 * time.Millisecond
+
+func daemonStatus() (daemon.Status, error) {
+	var st daemon.Status
+	err := call("GET", "/v1/status", nil, &st)
+	return st, err
+}
+
+// waitReady polls the control socket until the daemon answers with version want (the binary just installed,
+// not an old process that is still shutting down), for at most timeout.
+func waitReady(status func() (daemon.Status, error), want string, timeout time.Duration, sleep func(time.Duration)) error {
+	var last string
+	for waited := time.Duration(0); ; waited += readyPoll {
+		st, err := status()
+		switch {
+		case err == nil && st.Version == want:
+			return nil
+		case err != nil:
+			last = err.Error()
+		default:
+			last = fmt.Sprintf("it reports version %s instead of %s", st.Version, want)
+		}
+		if waited >= timeout {
+			return fmt.Errorf("the service did not answer on %s within %s: %s", daemon.SocketPath(), timeout, last)
+		}
+		sleep(readyPoll)
+	}
 }
 
 // installingUser is the user on whose behalf `service install` runs: the one who ran sudo, or, for the app's
@@ -331,12 +368,8 @@ func printServiceStatus() error {
 	s := serviceStatus(serviceProbe{
 		readPlist: func() ([]byte, error) { return os.ReadFile(plistPath) },
 		loaded:    func() bool { return loaded(label) },
-		status: func() (daemon.Status, error) {
-			var st daemon.Status
-			err := call("GET", "/v1/status", nil, &st)
-			return st, err
-		},
-		socket: daemon.SocketPath(),
+		status:    daemonStatus,
+		socket:    daemon.SocketPath(),
 	})
 	if jsonOut {
 		printJSON(s)

@@ -13,9 +13,23 @@ exactly like an app that binds to the physical network. Exit status 0 means an a
   leak-probe.py coverage LOGFILE START END     checks that the attempts cover START..END with no gap over
                                                1.5 s; prints a summary; exit 1 if any attempt got through
                                                or the coverage is incomplete.
+  leak-probe.py stream IFACE|- HOST PATH LOGFILE
+      downloads https://HOST/PATH (certificate verified) bound to IFACE ("-": unbound, so through the
+      routing table) at about 256 KB/s with a small receive buffer, and writes "status CODE ADDR", then
+      "<unix time> <bytes so far>" about every 0.25 s while data arrives (every second while it stalls),
+      then "end REASON". Runs until killed, the end of the body, an error, or 15 minutes.
+  leak-probe.py bytes LOGFILE T0 T1           prints the bytes a stream received between T0 and T1, its HTTP
+                                               status and how it ended ("-" while running).
+  leak-probe.py routes-diff BEFORE AFTER TUNIFACES PREFIX...
+      compares two `netstat -rn` snapshots (destination gateway flags interface) and prints each difference
+      as "openwarp|other -|+ LINE": "openwarp" when OpenWarp's route commands touch that destination (one
+      of the PREFIXes, an edge host route, a route on one of the comma-separated TUNIFACES), "other"
+      otherwise. Exit 1 if they differ.
 """
+import ipaddress
 import os
 import socket
+import ssl
 import struct
 import sys
 import time
@@ -96,6 +110,139 @@ def run(iface, spec):
     raise SystemExit("unknown probe " + spec)
 
 
+STREAM_RATE = 256 * 1024   # bytes per second
+STREAM_RCVBUF = 32 * 1024  # so that almost nothing is buffered when the flow is cut
+STREAM_MAX = 900.0
+
+
+def stream(iface, host, path, log):
+    start = time.time()
+    with open(log, "w") as f:
+        def note(line):
+            f.write(line + "\n")
+            f.flush()
+        try:
+            addr = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+            if iface == "-":
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(TIMEOUT)
+            else:
+                s = sock(iface, addr, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, STREAM_RCVBUF)
+            s.settimeout(5)
+            s.connect((addr, 443))
+            t = ssl.create_default_context().wrap_socket(s, server_hostname=host)
+            t.sendall(("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: openwarp-leak-test\r\nConnection: close\r\n\r\n"
+                       % (path, host)).encode())
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = t.recv(4096)
+                if not chunk:
+                    raise EOFError("connection closed before the response headers")
+                head += chunk
+                if len(head) > 65536:
+                    raise ValueError("response headers too long")
+            words = head.split(b"\r\n", 1)[0].decode("latin-1").split()
+            code = words[1] if len(words) > 1 else "?"
+            note("status %s %s" % (code, addr))
+            if code != "200":
+                note("end http %s" % code)
+                return 3
+            total = len(head.split(b"\r\n\r\n", 1)[1])
+            t.settimeout(1.0)
+            last = 0.0
+            while time.time() - start < STREAM_MAX:
+                try:
+                    chunk = t.recv(16384)
+                except socket.timeout:
+                    chunk = None
+                if chunk == b"":
+                    note("end eof")
+                    return 0
+                now = time.time()
+                if chunk:
+                    total += len(chunk)
+                if now - last >= 0.25 or not chunk:
+                    note("%.3f %d" % (now, total))
+                    last = now
+                if chunk:
+                    time.sleep(len(chunk) / STREAM_RATE)
+            note("end time limit")
+            return 0
+        except (OSError, EOFError, ValueError) as e:
+            note("end error %s: %s" % (type(e).__name__, str(e)[:120]))
+            return 1
+
+
+def stream_bytes(log, t0, t1):
+    """Bytes received between t0 and t1, the HTTP status and how the stream ended."""
+    status, end, samples = "-", "-", []
+    try:
+        lines = open(log).readlines()
+    except OSError:
+        return 0, "-", "not started"
+    for line in lines:
+        w = line.split()
+        if not w:
+            continue
+        if w[0] == "status":
+            status = w[1] if len(w) > 1 else "?"
+        elif w[0] == "end":
+            end = " ".join(w[1:])
+        else:
+            samples.append((float(w[0]), int(w[1])))
+
+    def total(t):
+        n = 0
+        for ts, b in samples:
+            if ts <= t:
+                n = b
+        return n
+    return total(t1) - total(t0), status, end
+
+
+def netstat_prefix(dest, flags):
+    """The prefix a `netstat -rn` destination stands for ("10" is 10.0.0.0/8, "172.16/12", "fe80::%lo0/64")."""
+    if dest == "default":
+        return None
+    d, _, bits = dest.partition("/")
+    d = d.split("%")[0]
+    if ":" in d:
+        return ipaddress.ip_network("%s/%s" % (d, bits or 128), strict=False)
+    octets = d.split(".")
+    n = int(bits) if bits else (32 if "H" in flags else 8 * len(octets))
+    return ipaddress.ip_network("%s/%d" % (".".join((octets + ["0", "0", "0"])[:4]), n), strict=False)
+
+
+EDGES = [ipaddress.ip_network("162.159.0.0/16"), ipaddress.ip_network("2606:4700::/32")]
+
+
+def routes_diff(before, after, tun, prefixes):
+    tuns = set(x for x in tun.split(",") if x)
+    managed = set()
+    for p in prefixes:
+        managed.add(ipaddress.ip_network(p, strict=False))
+    old = set(l.strip() for l in open(before) if l.strip())
+    new = set(l.strip() for l in open(after) if l.strip())
+    out = []
+    for sign, lines in (("-", old - new), ("+", new - old)):
+        for line in sorted(lines):
+            w = line.split()
+            kind = "other"
+            try:
+                net = netstat_prefix(w[0], w[2] if len(w) > 2 else "")
+            except ValueError:
+                net = None
+            if len(w) > 3 and w[3] in tuns:
+                kind = "openwarp"
+            elif net is not None and net in managed:
+                kind = "openwarp"
+            elif net is not None and net.num_addresses == 1 and any(net.subnet_of(e) for e in EDGES if e.version == net.version):
+                kind = "openwarp"
+            out.append("%s %s %s" % (kind, sign, line))
+    return out
+
+
 def main(argv):
     cmd = argv[1]
     if cmd in ("tcp", "dns", "ntp"):
@@ -127,6 +274,17 @@ def main(argv):
                     if not ok:
                         time.sleep(0.05)
         return 0
+    if cmd == "stream":
+        return stream(argv[2], argv[3], argv[4], argv[5])
+    if cmd == "bytes":
+        n, status, end = stream_bytes(argv[2], float(argv[3]), float(argv[4]))
+        print(n, status, end)
+        return 0
+    if cmd == "routes-diff":
+        out = routes_diff(argv[2], argv[3], argv[4], argv[5:])
+        for line in out:
+            print(line)
+        return 1 if out else 0
     if cmd == "coverage":
         start, end = float(argv[3]), float(argv[4])
         rows = [l.split() for l in open(argv[2]) if l.strip()]
