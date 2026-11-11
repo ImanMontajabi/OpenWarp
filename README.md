@@ -5,7 +5,8 @@
 <p align="center">An independent, open-source macOS client for the Cloudflare WARP network.</p>
 
 <p align="center"><a href="https://github.com/ImanMontajabi/OpenWarp/releases/latest"><b>Download for macOS</b></a> ·
-<a href="#install">Install</a> · <a href="#known-limitations">Limitations</a> · <a href="CHANGELOG.md">Changelog</a></p>
+<a href="#install">Install</a> · <a href="#known-limitations">Limitations</a> · <a href="CHANGELOG.md">Changelog</a> ·
+<a href="README.fa.md">فارسی</a></p>
 
 OpenWarp has three parts: a background daemon written in Go, a `warp-cli`-style command-line tool
 (`openwarp`), and a native SwiftUI app with a menu bar dashboard.
@@ -173,9 +174,11 @@ in [SECURITY.md](SECURITY.md).
 - Full-device modes change routes and DNS with `route` and `networksetup` instead of Apple's Network Extension
   framework. If the daemon is killed while connected, it restores routes and DNS when launchd restarts it;
   `sudo openwarp recover` does the same by hand.
-- The kill switch is experimental: its rules and logic are tested offline, and an earlier version passed the
-  live leak test (`scripts/leak-test.sh`) once on one Mac; the current rules have not been run live yet. If it ever
-  blocks your connection, disconnect or run `sudo openwarp recover`.
+- The kill switch is experimental: its rules and logic are tested offline. The live leak test
+  (`scripts/leak-test.sh`) ran once on one Apple silicon Mac against the build just before this release, and no
+  probe got around the tunnel; the fixes it led to have not been run through it yet. While it is on, other pf
+  firewalls on the Mac do not apply to the traffic it lets through. If it ever blocks your connection,
+  disconnect or run `sudo openwarp recover`.
 - Any local user can read the service's status; only root, administrators and the user who installed the
   service can control it ([details](docs/privacy-and-leak-protection.md#who-can-control-the-service)).
 - Trusted-network detection by SSID needs Location permission, which OpenWarp does not request yet; the
