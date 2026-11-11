@@ -835,10 +835,15 @@ func (e *Engine) Status() Status {
 		Protocol: set.Protocol, Registered: reg != nil, Since: e.since, DNSProtocol: "off",
 		Version: buildinfo.Version,
 	}
+	// One snapshot of the transport's counters for both Usage and Tunnel, so they agree with each other.
+	var cur *tunnel.Stats
+	if s := e.sess; s != nil && s.tr != nil {
+		ts := s.tr.Stats()
+		cur = &ts
+	}
 	if e.want {
 		u := Usage{TxBytes: e.usedTx, RxBytes: e.usedRx, Since: e.usedSince}
-		if s := e.sess; s != nil && s.tr != nil {
-			cur := s.tr.Stats()
+		if cur != nil {
 			u.TxBytes += cur.TxBytes
 			u.RxBytes += cur.RxBytes
 		}
@@ -849,9 +854,8 @@ func (e *Engine) Status() Status {
 		st.WarpPlus = reg.Account.WarpPlus
 	}
 	if s := e.sess; s != nil && e.status == StatusConnected {
-		if s.tr != nil {
-			ts := s.tr.Stats()
-			st.Tunnel = &ts
+		if cur != nil {
+			st.Tunnel = cur
 			st.Interface = s.iface
 			if s.v4.IsValid() {
 				st.InterfaceV4 = s.v4.String()
