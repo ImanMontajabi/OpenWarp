@@ -6,6 +6,40 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Kill switch (experimental, off by default): while a connection is wanted, a pf ruleset in the anchor
+  `com.apple/openwarp` blocks all traffic outside the tunnel except the connection to Cloudflare's edge, the API
+  fallback addresses, DHCP/IPv6 neighbour discovery and the split-tunnel exclusions; DNS to the local network is
+  blocked in the modes that manage DNS. It fails closed (no connection without its rules), stays in place while
+  the service restarts or after a crash, and is removed on disconnect, on trusted networks, by
+  `sudo openwarp recover` and by `service uninstall`. `/etc/pf.conf` is never edited. Not used in Local proxy
+  mode, the DNS-only modes or with Include split tunnelling (reported as such).
+- Connection verification: `openwarp verify [--cloudflare]`, and Verify / Ask Cloudflare in the app, check that
+  IPv4 and IPv6 are routed into the tunnel (or IPv6 is blocked), that the system DNS servers are OpenWarp's, that
+  the kill switch rules are loaded, and optionally that Cloudflare reports `warp=on` for a request through the
+  tunnel. Local checks run after every connection; the Cloudflare request only when asked.
+- Status reports the protection state (`protection`: not protected, blocking, connected but not verified,
+  verified, problem found), the kill switch state, and how IPv6 and DNS are handled. Shown in the app's new
+  Leak protection card (Connectivity) and in `openwarp status` / `openwarp killswitch status`.
+- `sudo openwarp recover`: removes the kill switch rules and restores routes and DNS without the daemon.
+- [Privacy and leak protection](docs/privacy-and-leak-protection.md): threat model, what each mode protects,
+  the kill switch, verification, and guidance for lawful peer-to-peer use. `scripts/leak-test.sh`: an opt-in,
+  root-only leak test for a real Mac (refuses to run in CI).
+
+### Changed
+
+- The Home page says what a connection does ("Your traffic goes through Cloudflare.", "Your DNS queries are
+  encrypted.") instead of "Your Internet is private."
+- Resetting settings keeps the kill switch, like Always On.
+
+### Fixed
+
+- IPv6 leaked outside the tunnel when the tunnel had no IPv6 address or assigning it failed; it is now rejected
+  (apps fall back to IPv4).
+- After the daemon was killed while connected, its routes and DNS servers stayed behind (in the HTTPS/TLS modes
+  that meant no DNS at all). They are recorded in a journal and restored on the next start.
+
 ## [0.1.0] - 2026-11-10
 
 First public version (MVP). Release notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).

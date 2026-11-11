@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -219,5 +220,32 @@ func TestServiceStatusNeedsNoRoot(t *testing.T) {
 	}
 	if r := runCLI(t, f.sock, "service", "install"); r.code == 0 || !strings.Contains(r.stderr, "sudo") {
 		t.Fatalf("install without root should ask for sudo: %+v", r)
+	}
+}
+
+// The privileged leak test changes the machine's networking, so it must refuse to run in CI and without
+// the explicit opt-in, before doing anything.
+func TestLeakTestScriptRefusesWithoutOptIn(t *testing.T) {
+	script := filepath.Join("..", "..", "scripts", "leak-test.sh")
+	run := func(env ...string) (string, int) {
+		cmd := exec.Command("sh", script)
+		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, env...)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		return string(out), code
+	}
+	for _, env := range [][]string{{"CI=true"}, {"GITHUB_ACTIONS=true"}, {"CI=1", "OPENWARP_LEAK_TEST=I-UNDERSTAND"}} {
+		if out, code := run(env...); code != 2 || !strings.Contains(out, "refusing to run in CI") {
+			t.Errorf("%v: exit %d, %q", env, code, out)
+		}
+	}
+	// Outside CI it still needs root and the opt-in (this test never runs as root).
+	if os.Geteuid() != 0 {
+		if out, code := run(); code != 2 || (!strings.Contains(out, "run with sudo") && !strings.Contains(out, "macOS only")) {
+			t.Errorf("no opt-in: exit %d, %q", code, out)
+		}
 	}
 }

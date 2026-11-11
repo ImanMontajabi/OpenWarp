@@ -89,7 +89,8 @@ actor FakeDaemon: Backend {
     static func defaultSettings() -> [String: Any] {
         ["mode": "warp", "protocol": "masque", "always_on": false, "families": "off", "proxy_port": 40000,
          "mtu": 1280, "split_mode": "exclude", "split_ips": defaultExcludes, "fallback_domains": defaultFallback,
-         "trusted_ssids": NSNull(), "disable_wifi": false, "disable_ethernet": false, "post_quantum": true]
+         "trusted_ssids": NSNull(), "disable_wifi": false, "disable_ethernet": false, "post_quantum": true,
+         "kill_switch": false]
     }
 
     let scenario: Scenario
@@ -106,6 +107,8 @@ actor FakeDaemon: Backend {
     /// Traffic of the current connection; grows on every status poll while connected.
     private var usageTx: UInt64 = 0, usageRx: UInt64 = 0
     private var usageSince = "2026-01-02T03:04:05Z"
+    /// The last verification of the current connection (cleared when it reconnects).
+    private var verification: [String: Any]?
 
     init(scenario: Scenario) {
         self.scenario = scenario
@@ -137,15 +140,17 @@ actor FakeDaemon: Backend {
         case ["connect"]:
             guard registered else { return fail("not registered: run `openwarp registration new`") }
             if conn == "Disconnected" { usageTx = 0; usageRx = 0; usageSince = "2026-01-02T03:04:\(10 + calls.count % 50)Z" }
-            conn = "Connecting"; reason = nil; settings["always_on"] = true
+            conn = "Connecting"; reason = nil; settings["always_on"] = true; verification = nil
             return done()
         case ["disconnect"]:
-            conn = "Disconnected"; reason = "Manual Disconnection"; settings["always_on"] = false
+            conn = "Disconnected"; reason = "Manual Disconnection"; settings["always_on"] = false; verification = nil
             return done()
         case ["settings", "reset"]:
-            let on = settings["always_on"]
-            settings = Self.defaultSettings(); settings["always_on"] = on
+            let on = settings["always_on"], ks = settings["kill_switch"]
+            settings = Self.defaultSettings(); settings["always_on"] = on; settings["kill_switch"] = ks
             return ok(settings)
+        case ["killswitch", "on"], ["killswitch", "off"]: return patch("kill_switch", args[1] == "on")
+        case ["verify"], ["verify", "--cloudflare"]: return verify(cloudflare: args.count == 2)
         case ["tunnel", "rotate-keys"]: return done()
         default: return setting(args)
         }
@@ -208,7 +213,7 @@ actor FakeDaemon: Backend {
 
     private func patch(_ key: String, _ value: Any) -> (Data, String?) {
         settings[key] = value
-        if key == "mode" || key == "protocol", conn == "Connected" { conn = "Connecting" }
+        if key == "mode" || key == "protocol", conn == "Connected" { conn = "Connecting"; verification = nil }
         return ok(settings)
     }
 
@@ -223,6 +228,7 @@ actor FakeDaemon: Backend {
         if let runningVersion { s["version"] = runningVersion }
         if registered { s["account_type"] = "free" }
         if let reason { s["reason"] = reason }
+        let shown = conn   // what this poll reports (a Connecting poll flips conn for the next one)
         switch conn {
         case "Connecting":
             if scenario == .connectFails {
@@ -244,7 +250,67 @@ actor FakeDaemon: Backend {
             s["usage"] = ["tx_bytes": usageTx, "rx_bytes": usageRx, "since": usageSince] as [String: Any]
         default: break
         }
+        s["protection"] = protection(mode: mode, conn: shown)
         return s
+    }
+
+    /// Matches protection.go: the kill switch only applies to the tun modes with Exclude split tunnelling.
+    private func protection(mode: String, conn: String) -> [String: Any] {
+        let ksOn = settings["kill_switch"] as? Bool ?? false
+        let applies = !["proxy", "doh", "dot"].contains(mode) && settings["split_mode"] as? String != "include"
+        var p: [String: Any] = ["kill_switch": "off"]
+        if ksOn && !applies {
+            p["kill_switch"] = "unavailable"
+            p["kill_switch_detail"] = mode == "proxy"
+                ? "in Local proxy mode only apps that use the proxy are tunnelled; the system network is not changed"
+                : "DNS-only modes do not tunnel traffic, so there is nothing to block it for"
+        }
+        switch conn {
+        case "Connected":
+            if ksOn && applies { p["kill_switch"] = "protecting" }
+            p["state"] = (verification?["result"] as? String).map { $0 == "verified" ? "verified" : $0 == "failed" ? "failed" : "unverified" } ?? "unverified"
+            if let verification { p["verification"] = verification }
+            switch mode {
+            case "proxy": p["ipv6"] = "proxy"; p["dns"] = "proxy"
+            case "doh", "dot": p["dns"] = "encrypted"
+            default:
+                p["ipv6"] = "blocked"
+                p["dns"] = mode == "warp" ? "tunnel" : mode == "tunnel_only" ? "system" : "encrypted"
+            }
+        case "Connecting":
+            if ksOn && applies { p["kill_switch"] = "blocking"; p["kill_switch_detail"] = "no tunnel: traffic is blocked until the connection is back" }
+            p["state"] = ksOn && applies ? "blocking" : "connecting"
+        default:
+            if ksOn && applies { p["kill_switch"] = "standby"; p["kill_switch_detail"] = "takes effect when you connect" }
+            p["state"] = "unprotected"
+        }
+        return p
+    }
+
+    /// Matches `openwarp -j verify [--cloudflare]` for a healthy connection (documentation addresses).
+    private func verify(cloudflare: Bool) -> (Data, String?) {
+        guard conn == "Connected" else { return fail("not connected") }
+        let mode = settings["mode"] as? String ?? "warp"
+        let tun = !["proxy", "doh", "dot"].contains(mode)
+        var checks: [[String: Any]] = [["name": "tunnel", "status": "pass", "detail": "masque via 192.0.2.10:443"]]
+        if tun {
+            checks.append(["name": "ipv4_route", "status": "pass", "detail": "IPv4 goes through utun9"])
+            checks.append(["name": "ipv6_route", "status": "pass", "detail": "IPv6 is blocked (the tunnel has no IPv6 address)"])
+        } else {
+            checks.append(["name": "ipv4_route", "status": "skip", "detail": "Local proxy mode: only apps that use the proxy are tunnelled"])
+        }
+        checks.append(mode == "warp" ? ["name": "dns", "status": "pass", "detail": "system DNS: 1.1.1.1, 1.0.0.1"]
+                                     : ["name": "dns", "status": "skip", "detail": "system DNS is not changed in this mode"])
+        let ks = settings["kill_switch"] as? Bool ?? false
+        checks.append(ks && tun ? ["name": "kill_switch", "status": "pass", "detail": "pf rules loaded and pf enabled"]
+                                : ["name": "kill_switch", "status": "skip", "detail": "off"])
+        if cloudflare {
+            checks.append(["name": "cloudflare", "status": "pass", "detail": "Cloudflare reports warp=on (data centre FRA)"])
+        }
+        let result = tun || cloudflare ? "verified" : "incomplete"
+        let v: [String: Any] = ["result": result, "at": "2026-01-02T03:04:05Z", "checks": checks]
+        verification = v
+        return ok(v)
     }
 
     /// Matches `openwarp -j service status`.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ImanMontajabi/OpenWarp/internal/buildinfo"
 	"github.com/ImanMontajabi/OpenWarp/internal/daemon"
+	"github.com/ImanMontajabi/OpenWarp/internal/state"
 )
 
 const (
@@ -218,6 +219,10 @@ func service(action string) error {
 	case "uninstall":
 		removeLegacy()
 		stopService(label)
+		// The stopped daemon may have kept the kill switch rules (fail closed); nothing would remove them now.
+		for _, msg := range daemon.ResetNetwork(state.DefaultDir()) {
+			fmt.Println(msg)
+		}
 		os.Remove(plistPath)
 		if dst, _ := os.Readlink(linkPath); dst == helperPath {
 			os.Remove(linkPath)

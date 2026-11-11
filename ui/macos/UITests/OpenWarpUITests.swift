@@ -98,7 +98,7 @@ final class OpenWarpUITests: XCTestCase {
         cloud.click()
         waitForStatus("Connected")
         XCTAssertEqual(cloud.label, "Disconnect")
-        XCTAssertEqual(text(app.staticTexts["home.detail"]), "Your Internet is private.")
+        XCTAssertEqual(text(app.staticTexts["home.detail"]), "Your traffic goes through Cloudflare.")
         cloud.click()
         waitForStatus("Disconnected")
         XCTAssertEqual(cloud.label, "Connect")
@@ -239,6 +239,39 @@ final class OpenWarpUITests: XCTestCase {
         XCTAssertTrue(wait("value == 0", on: toggle))
         _ = try openDashboard()
         XCTAssertTrue(element("dash.location.enable").waitForExistence(timeout: timeout), "the dashboard offers to turn it back on")
+    }
+
+    func testKillSwitchAsksBeforeTurningOnAndReportsProtection() {
+        launch()
+        open("Connectivity")
+        let toggle = app.checkBoxes["toggle.kill_switch"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: timeout))
+        XCTAssertEqual(isOn(toggle), false, "off by default")
+        toggle.click()
+        // Nothing changes until the confirmation is accepted.
+        let confirm = app.buttons["Turn On Kill Switch"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: timeout), "no confirmation before blocking traffic")
+        XCTAssertEqual(isOn(toggle), false)
+        confirm.click()
+        XCTAssertTrue(wait("value == 1", on: toggle))
+
+        let badge = element("protection.state")
+        XCTAssertTrue(wait("value == %@", ["Not protected"], on: badge), "disconnected is not protected")
+        open("Home")
+        cloud.click()
+        waitForStatus("Connected")
+        open("Connectivity")
+        XCTAssertTrue(wait("value == %@", ["Connected, not verified"], on: badge))
+        let verify = app.buttons["protection.verify"]
+        scrollIntoView(verify)
+        verify.click()
+        XCTAssertTrue(wait("value == %@", ["Verified"], on: badge))
+        XCTAssertTrue(element("check.kill_switch").exists, "the kill switch check is listed")
+
+        // Turning it off needs no confirmation.
+        scrollIntoView(toggle)
+        toggle.click()
+        XCTAssertTrue(wait("value == 0", on: toggle))
     }
 
     // MARK: navigation

@@ -83,6 +83,7 @@ App tests (`scripts/test-app.sh [ui|record]`):
   `home.status`, `home.detail`, `page.title`, `page.scroll`, `segment.<value>`, `toggle.<key>`,
   `choice.<title>`, `choice.option.<value>`, `toast.error|success` (message `toast.text`), `onboarding.install|error|recheck|ready|note|manual`,
   `banner.outdated|update`, `toggle.lookup_public_ip`, `toggle.check_updates`, `updates.status|check|download`,
+  `toggle.kill_switch`, `protection.state|verify|cloudflare`, `check.<name>`,
   `update.banner|banner.text|banner.download|banner.dismiss`, `about.source`, and in the menu bar panel `dash.status`, `dash.mode`,
   `dash.connect`, `dash.source`, `dash.feedback`, `dash.upload|download.rate|total`, `dash.system`,
   `dash.location.system|proxy` (rows `value.Public IP` …), `dash.location.refresh|enable`, `dash.quit`, `dash.open`.
@@ -111,6 +112,8 @@ UI files:
   `accessibilityHidden`, `\.owPageActive == false`). Never key pages with `.id(tab)`: that rebuilt and reloaded
   them on every switch and reset their scroll and disclosure state.
 - `HomeView.swift`, `ConnectivityView.swift`, `SettingsView.swift`, `ProfileView.swift`, `AboutView.swift`.
+- `Protection.swift`: `ProtectionText` (wording for the daemon's protection values), `ProtectionBadge`, `CheckRow`,
+  `LeakProtectionSection` (Connectivity: kill switch toggle with confirmation, IPv6/DNS, checks, Verify buttons).
 - `ui/macos/legacy-backup/CWarpApp.swift.orig`: the pre-redesign single-file UI (not compiled).
 
 UI rules: dark only, flat/matte, no purple/neon/glow/glass. Mode selection shows the accent on selected
@@ -138,6 +141,7 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
   - `GET /v1/status`, `POST /v1/connect|disconnect`
   - `GET|PATCH /v1/settings`, `POST /v1/settings/reset`. PATCH takes a partial JSON object keyed by the
     `state.Settings` json tags and rejects unknown keys.
+  - `POST /v1/verify[?cloudflare=1]`: verification of the current connection (`protection.go`).
   - `GET|POST|DELETE /v1/registration`, `GET /v1/registration/account|devices`,
     `PUT /v1/registration/license`, `POST /v1/tunnel/rotate-keys`
 - **State** (`internal/state`): one `state.json` (0600) holds the registration, token, both private keys,
@@ -149,6 +153,18 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
   network and always-on changes only poke the loop.
 - **Sessions are rebuilt from scratch** on every reconnect (a new tun per endpoint attempt). A failed
   WireGuard device closes its tun, and `onceTun` guards against a double Close (netstack would panic).
+- **Leak protection** (`internal/daemon/protection.go`, `internal/firewall`, docs/privacy-and-leak-protection.md):
+  - Kill switch = pf rules in anchor `com.apple/openwarp` (`firewall.Rules` renders them; `firewall.PF` loads them
+    with `pfctl`, holds a `pfctl -E` reference saved in `<state dir>/pf-token`). `Engine.syncKillSwitch` is the
+    one place that decides: rules while `want && KillSwitch && tun mode && exclude split && !paused`, nothing
+    otherwise. It runs at the top of every loop iteration, after key enrollment, and after a session is up. It
+    fails closed (the loop does not connect when it errors). Lock order: `ksMu` before `mu`, never the reverse.
+  - Shutdown keeps the rules when a connection is wanted; startup clears them unless AlwaysOn + kill switch.
+  - `sysnet` journals route/DNS changes (`<state dir>/network-journal.json`, root only) and `Recover` undoes them
+    at startup; no IPv6 in the tunnel ⇒ `::/1` and `8000::/1` reject routes.
+  - `Engine.Verify` checks routes/DNS/kill switch through the `Probe` interface (fakes in tests) and only with
+    `cloudflare` fetches the trace. `Status.Protection` never says verified without a passing check of the
+    current session.
 
 ## Protocol facts (from RE; keep these exact)
 
@@ -199,6 +215,10 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 **Unit/e2e tested only:** the transports, the control API, proxy mode end-to-end, and DNS helpers.
 
 **Not yet verified (need root; test these first when touching them):**
+- The kill switch on a live connection (pf anchor load, `pfctl -E/-X`, blocking during reconnect and after
+  `kill -9`), the IPv6 reject routes, and journal recovery. Offline: fake `pfctl`, plus `pfctl -n` parsing of
+  the generated rules. Run `sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh` (asks nothing, changes
+  networking; only with the user's go-ahead).
 - `warp` / `warp+doh` / `warp+dot` / `tunnel_only` modes: utun address setup, split routes, endpoint host
   route, `networksetup` DNS change and restore (`internal/sysnet/sysnet_darwin.go`).
 - DNS-only modes `doh` / `dot`: the local stub resolver binds `127.0.0.1:53`.
@@ -213,8 +233,8 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 
 ## Next steps / backlog (suggested priority)
 
-1. Root test of `warp` mode. Confirm routes and DNS are restored on disconnect, crash and `kill -9`.
-   Consider a startup cleanup of stale routes and DNS.
+1. Root test of `warp` mode and the kill switch with `scripts/leak-test.sh`. Routes and DNS are now journaled and
+   restored at startup, but that is untested on a real Mac.
 2. Delay or retry after key enrollment instead of burning a port attempt.
 3. Use IPv6 endpoints and `route -n get -inet6` handling. Today v6 is only tried when a v6 default route exists.
 4. Hostname-based split tunnel (official `tunnel host`), which needs DNS interception.

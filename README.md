@@ -40,7 +40,8 @@ macOS client (version 2026.8.2115.0) talks to the network; no Cloudflare code is
 | Tunnel protocols | MASQUE (HTTP/3 CONNECT-IP over QUIC, with optional post-quantum key exchange) and WireGuard |
 | Registration | Register this Mac, show or delete the registration, attach a WARP+ license key, list the account's devices |
 | Settings | Split tunnel (exclude or include list), local domain fallback, 1.1.1.1 for Families, trusted Wi-Fi/Ethernet, MTU, proxy port, endpoint override, key rotation |
-| Reliability | Reconnect with backoff, endpoint and port fallback, restart on network change |
+| Reliability | Reconnect with backoff, endpoint and port fallback, restart on network change; routes and DNS restored after a crash |
+| Leak protection | Kill switch (experimental, macOS pf, off by default), IPv6 blocked when the tunnel has none, DNS to the local network blocked, and a check of the connection (routes, DNS, kill switch, optionally Cloudflare's own `warp=on`). See [Privacy and leak protection](docs/privacy-and-leak-protection.md) |
 | App | Compact window with Home, Connectivity, Settings, Profile and About pages and a cloud-shaped connect button; first-run setup of the background service |
 | Menu bar | Dashboard with status, connect button, live upload/download rates and session totals, and the public IP, country and Cloudflare data centre |
 
@@ -88,7 +89,14 @@ openwarp mode warp            # or warp+doh, warp+dot, doh, dot, proxy, tunnel_o
 openwarp connect
 openwarp status
 openwarp service status       # is the background service installed, running and up to date? (no root needed)
+openwarp killswitch on        # block traffic outside the tunnel (experimental)
+openwarp verify --cloudflare  # check routes, DNS and the kill switch, and ask Cloudflare whether it sees WARP
 ```
+
+OpenWarp keeps the local network and your provider from seeing which sites you visit, and those sites see a
+Cloudflare address instead of yours. It is not an anonymity tool: Cloudflare sees your IP address and where your
+traffic goes. [Privacy and leak protection](docs/privacy-and-leak-protection.md) explains what is and is not
+protected, how the kill switch works, and how to use peer-to-peer software with it.
 
 More commands: `openwarp help`.
 
@@ -163,7 +171,11 @@ in [SECURITY.md](SECURITY.md).
 - First MVP release: verified live in `proxy` mode (registration, MASQUE and WireGuard) and by the author in
   `warp` mode on one Apple silicon Mac. Other root modes, Intel Macs and macOS versions before 26 are untested.
 - Full-device modes change routes and DNS with `route` and `networksetup` instead of Apple's Network Extension
-  framework. If the daemon is killed while connected, the DNS settings may need to be restored by hand.
+  framework. If the daemon is killed while connected, it restores routes and DNS when launchd restarts it;
+  `sudo openwarp recover` does the same by hand.
+- The kill switch is experimental: its rules and logic are tested offline, but it has not yet been run against a
+  live connection on a real Mac (`scripts/leak-test.sh` does that). If it ever blocks your connection, disconnect
+  or run `sudo openwarp recover`.
 - Trusted-network detection by SSID needs Location permission, which OpenWarp does not request yet; the
   Wi-Fi and Ethernet switches work without it.
 - Automatic update checks ask GitHub's API (`api.github.com`) for the latest release once a day while the app

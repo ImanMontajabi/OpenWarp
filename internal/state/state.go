@@ -110,6 +110,8 @@ type Settings struct {
 	DisableWiFi      bool      `json:"disable_wifi"`
 	DisableEthernet  bool      `json:"disable_ethernet"`
 	PostQuantum      bool      `json:"post_quantum"`
+	// KillSwitch blocks traffic outside the tunnel while connected or reconnecting (pf; off by default).
+	KillSwitch bool `json:"kill_switch"`
 }
 
 func DefaultSettings() Settings {
@@ -202,6 +204,9 @@ func Open(dir string) (*Store, error) {
 	}
 	return st, nil
 }
+
+// Dir is the directory that holds state.json.
+func (s *Store) Dir() string { return filepath.Dir(s.path) }
 
 func (s *Store) Lock()   { s.mu.Lock() }
 func (s *Store) Unlock() { s.mu.Unlock() }

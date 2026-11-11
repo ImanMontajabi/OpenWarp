@@ -105,6 +105,13 @@ func (e *Engine) Handler() http.Handler {
 		writeJSON(w, nil, nil)
 	})
 	mux.HandleFunc("POST /v1/disconnect", func(w http.ResponseWriter, r *http.Request) { e.Disconnect(); writeJSON(w, nil, nil) })
+	// Verify the current connection; ?cloudflare=1 adds the trace request to Cloudflare through the tunnel.
+	mux.HandleFunc("POST /v1/verify", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := ctxT(r)
+		defer cancel()
+		v, err := e.Verify(ctx, r.URL.Query().Get("cloudflare") == "1")
+		writeJSON(w, v, err)
+	})
 
 	mux.HandleFunc("GET /v1/settings", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, e.Settings(), nil) })
 	mux.HandleFunc("PATCH /v1/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -135,9 +142,10 @@ func (e *Engine) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /v1/settings/reset", func(w http.ResponseWriter, r *http.Request) {
 		s, err := e.UpdateSettings(func(s *state.Settings) error {
-			on := s.AlwaysOn
+			// Resetting never silently drops protection the user switched on.
+			on, ks := s.AlwaysOn, s.KillSwitch
 			*s = state.DefaultSettings()
-			s.AlwaysOn = on
+			s.AlwaysOn, s.KillSwitch = on, ks
 			return nil
 		})
 		writeJSON(w, s, err)

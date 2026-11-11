@@ -30,6 +30,8 @@ actor MockBackend: Backend {
     func respond(_ args: [String], json: Data) { responses[args] = (json, nil) }
     func respond(_ args: [String], fixture: String) throws { responses[args] = (try Contract.data(fixture), nil) }
     func fail(_ args: [String], _ message: String) { responses[args] = (Data(), message) }
+    /// Output and a failing exit status together (e.g. `verify` prints the result and exits 1 when it failed).
+    func respond(_ args: [String], json: Data, error: String) { responses[args] = (json, error) }
 
     func run(_ args: [String]) async -> (Data, String?) {
         calls.append(args)
