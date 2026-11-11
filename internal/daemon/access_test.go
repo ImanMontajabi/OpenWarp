@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -171,5 +173,22 @@ func TestAccessWithoutPeerCredentials(t *testing.T) {
 		if rec.Code != want {
 			t.Errorf("GET %s: %d, want %d", path, rec.Code, want)
 		}
+	}
+}
+
+// A refused request is logged with its method and path quoted, so a client cannot forge log lines (a path with
+// a newline would otherwise start a new, fake entry in /var/log/openwarp.log).
+func TestRefusalLogCannotBeForged(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	c := newControlHarness(t)
+	h := Access{}.Wrap(c.eng.Handler())
+	req := httptest.NewRequest("GET", "/v1/settings", nil)
+	req.URL.Path = "/v1/settings\n2026/11/11 01:00:00 kill switch: off"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	out := buf.String()
+	if strings.Count(strings.TrimSpace(out), "\n") != 0 || !strings.Contains(out, `\n2026/11/11`) {
+		t.Fatalf("log line not escaped: %q", out)
 	}
 }

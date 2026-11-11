@@ -114,7 +114,8 @@ func (a Access) Wrap(h http.Handler) http.Handler {
 			err = a.Allows(p)
 		}
 		if err != nil {
-			log.Printf("control: refused %s %s from uid %d (pid %d)", r.Method, r.URL.Path, p.UID, p.PID)
+			// %q: the method and path come from the client and must not be able to forge log lines.
+			log.Printf("control: refused %q %q from uid %d (pid %d)", r.Method, r.URL.Path, p.UID, p.PID)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
