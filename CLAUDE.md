@@ -227,7 +227,7 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
   - CLI help: `warp-cli --help`.
   - Hopper (demo) cannot finish analysing the 84 MB daemon slice, so prefer strings, symbols and logs.
 
-## Verification status (as of 2026-11-10)
+## Verification status (as of 2026-11-11)
 
 **Verified live** against Cloudflare (proxy mode, user daemon): registration, MASQUE key enrollment, and
 `warp=on` via MASQUE (443 and 500) and via WireGuard (2408). The GUI was tested against the live daemon.
@@ -238,8 +238,12 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 - The kill switch on a live connection (pf anchor load, `pfctl -E/-X`, blocking during reconnect and after
   `kill -9`), the IPv6 reject routes, and journal recovery. One run of the extended leak test on 2026-11-11
   (`0.1.0+dev.c5f025d`, one Apple silicon Mac, Wi-Fi): 49 passed, 3 failed, 1 skipped, no probe got around the
-  tunnel; the failures led to the route-ownership and ALTQ fixes and are not re-run yet. Offline: fake `pfctl`, plus `pfctl -n` parsing of
-  the generated rules. Run `sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh` (asks nothing, changes
+  tunnel; the failures led to the route-ownership and ALTQ fixes. Two runs of the 0.1.0 release build
+  (2026-11-11, same Mac): 61 passed, 1 failed each; no probe got around the tunnel; pf's counters confirm the
+  anchors are evaluated in listing order. Open: the positive control (a `pass quick` in an anchor before
+  OpenWarp's) never matched the probe's SYN; every blocked probe failed in ~50 ms (a local error, not a
+  timeout). PR #18 records the errno and kill switch counters to settle it. Offline: fake `pfctl`, plus
+  `pfctl -n` parsing of the generated rules. Run `sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh` (asks nothing, changes
   networking; only with the user's go-ahead).
 - `warp` / `warp+doh` / `warp+dot` / `tunnel_only` modes: utun address setup, split routes, endpoint host
   route, `networksetup` DNS change and restore (`internal/sysnet/sysnet_darwin.go`).
