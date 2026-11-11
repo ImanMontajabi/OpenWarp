@@ -118,7 +118,21 @@ func countingAPI(t *testing.T) (*api.Client, *atomic.Int32) {
 	return &api.Client{BaseURL: ts.URL, Identity: api.MacIdentity, HTTP: ts.Client()}, &n
 }
 
+// protectedEngine runs the connection loop, for tests that go through Connect.
 func protectedEngine(t *testing.T, fw *fakeFW, probe *fakeProbe, mutate func(*state.State)) (*Engine, *atomic.Int32) {
+	t.Helper()
+	return newProtectedEngine(t, fw, probe, mutate, false)
+}
+
+// manualEngine has no connection loop: for tests that set the session and status by hand. With the loop
+// running, it would race them (it saw want=true and set "connecting" over a hand-set "connected" on a slow
+// CI runner).
+func manualEngine(t *testing.T, fw *fakeFW, probe *fakeProbe, mutate func(*state.State)) (*Engine, *atomic.Int32) {
+	t.Helper()
+	return newProtectedEngine(t, fw, probe, mutate, true)
+}
+
+func newProtectedEngine(t *testing.T, fw *fakeFW, probe *fakeProbe, mutate func(*state.State), manual bool) (*Engine, *atomic.Int32) {
 	t.Helper()
 	store, err := state.Open(t.TempDir())
 	if err != nil {
@@ -143,7 +157,7 @@ func protectedEngine(t *testing.T, fw *fakeFW, probe *fakeProbe, mutate func(*st
 	if probe == nil {
 		probe = &fakeProbe{}
 	}
-	e := NewEngineWithOptions(store, client, Options{Firewall: f, FirewallErr: errors.New("test: no firewall"), Probe: probe})
+	e := NewEngineWithOptions(store, client, Options{Firewall: f, FirewallErr: errors.New("test: no firewall"), Probe: probe, manual: manual})
 	t.Cleanup(e.Shutdown)
 	return e, calls
 }
@@ -162,7 +176,7 @@ func (e *Engine) setConnected(s *session) {
 
 func TestKillSwitchFollowsTheConnection(t *testing.T) {
 	fw := &fakeFW{}
-	e, _ := protectedEngine(t, fw, nil, nil)
+	e, _ := manualEngine(t, fw, nil, nil)
 	set := e.Settings()
 
 	if st := e.Status().Protection; st.KillSwitch != KSStandby || st.State != ProtUnprotected {
@@ -228,7 +242,7 @@ func TestKillSwitchFollowsTheConnection(t *testing.T) {
 
 func TestKillSwitchOffClearsRules(t *testing.T) {
 	fw := &fakeFW{}
-	e, _ := protectedEngine(t, fw, nil, nil)
+	e, _ := manualEngine(t, fw, nil, nil)
 	e.setWant(true)
 	set := e.Settings()
 	e.syncKillSwitch(set, nil, false)
@@ -282,7 +296,7 @@ func TestKillSwitchFailsClosed(t *testing.T) {
 
 // Without a firewall (no root, not macOS) the kill switch is an error in the tun modes, never silently off.
 func TestKillSwitchWithoutFirewallIsAnError(t *testing.T) {
-	e, _ := protectedEngine(t, nil, nil, nil)
+	e, _ := manualEngine(t, nil, nil, nil)
 	e.setWant(true)
 	err := e.syncKillSwitch(e.Settings(), nil, false)
 	if err == nil || !strings.Contains(err.Error(), "test: no firewall") {
@@ -309,7 +323,7 @@ func TestKillSwitchScope(t *testing.T) {
 		{state.ModeWarp, state.SplitInclude, false},
 	} {
 		fw := &fakeFW{}
-		e, _ := protectedEngine(t, fw, nil, nil)
+		e, _ := manualEngine(t, fw, nil, nil)
 		set := e.Settings()
 		set.Mode, set.SplitMode = tc.mode, tc.split
 		e.setWant(true)
@@ -333,7 +347,7 @@ func TestKillSwitchScope(t *testing.T) {
 
 func TestKillSwitchPausesOnTrustedNetworks(t *testing.T) {
 	fw := &fakeFW{}
-	e, _ := protectedEngine(t, fw, nil, nil)
+	e, _ := manualEngine(t, fw, nil, nil)
 	e.setWant(true)
 	set := e.Settings()
 	e.syncKillSwitch(set, nil, false)
@@ -348,7 +362,7 @@ func TestKillSwitchPausesOnTrustedNetworks(t *testing.T) {
 
 func TestKillSwitchPolicyUsesEnrolledEdges(t *testing.T) {
 	fw := &fakeFW{}
-	e, _ := protectedEngine(t, fw, nil, func(s *state.State) {
+	e, _ := manualEngine(t, fw, nil, func(s *state.State) {
 		var c api.Config
 		c.Peers = []api.Peer{{PublicKey: "k", Endpoint: api.Endpoint{V4: "162.159.198.2:0", V6: "[2606:4700:103::2]:0"}}}
 		s.MasqueConfig = &c
@@ -419,7 +433,7 @@ func TestVerifyConnection(t *testing.T) {
 	verify := func(t *testing.T, probe *fakeProbe, mode state.Mode, trace bool, mutate func(*state.State)) (*Verification, *Engine) {
 		t.Helper()
 		fw := &fakeFW{}
-		e, _ := protectedEngine(t, fw, probe, func(s *state.State) {
+		e, _ := manualEngine(t, fw, probe, func(s *state.State) {
 			s.Settings.Mode = mode
 			if mutate != nil {
 				mutate(s)
@@ -500,7 +514,7 @@ func TestVerifyConnection(t *testing.T) {
 	t.Run("kill switch rules missing", func(t *testing.T) {
 		probe := good()
 		fw := &fakeFW{}
-		e, _ := protectedEngine(t, fw, probe, nil)
+		e, _ := manualEngine(t, fw, probe, nil)
 		e.setWant(true)
 		s := tunSession(state.ModeWarp)
 		e.setConnected(s)
@@ -549,7 +563,7 @@ func TestVerifyConnection(t *testing.T) {
 		}
 	})
 	t.Run("not connected", func(t *testing.T) {
-		e, _ := protectedEngine(t, &fakeFW{}, good(), nil)
+		e, _ := manualEngine(t, &fakeFW{}, good(), nil)
 		if _, err := e.Verify(context.Background(), false); err == nil {
 			t.Fatal("verified without a connection")
 		}

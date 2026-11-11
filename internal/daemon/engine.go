@@ -128,6 +128,10 @@ type Options struct {
 	FirewallErr error  // why Firewall is nil (reported when the kill switch is switched on)
 	Probe       Probe  // nil: the real routing table and DNS configuration
 	Journal     string // file that records route and DNS changes for crash recovery ("": none)
+
+	// manual leaves the connection loop stopped: tests that drive the kill switch and status by hand use
+	// it, so the loop cannot change the state under them.
+	manual bool
 }
 
 // retireLocked folds a session's transport counters into the connection's usage
@@ -203,7 +207,9 @@ func NewEngineWithOptions(store *state.Store, client *api.Client, opts Options) 
 	auto := set.AlwaysOn && store.S.Registration != nil
 	store.Unlock()
 	e.recoverNetwork(auto && set.KillSwitch && killSwitchScope(set) == "")
-	go e.loop()
+	if !opts.manual {
+		go e.loop()
+	}
 	if auto {
 		e.Connect()
 	}
