@@ -1,0 +1,8 @@
+{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck","scanner_version":"v1.9.0","db":"https://vuln.go.dev","go_version":"go1.27.3","scan_level":"symbol","scan_mode":"source"}}
+{"progress":{"message":"Scanning your code and 262 packages across 9 dependent modules for known vulnerabilities..."}}
+{"osv":{"schema_version":"1.3.1","id":"GO-2026-9001","aliases":["CVE-2026-9001","GHSA-wwww-xxxx-yyyy"],"summary":"Panic on malformed QUIC frames in github.com/quic-go/quic-go","details":"...","references":[{"type":"FIX","url":"https://github.com/quic-go/quic-go/pull/1"}]}}
+{"finding":{"osv":"GO-2026-9001","fixed_version":"v0.65.1","trace":[{"module":"github.com/quic-go/quic-go","version":"v0.65.0"}]}}
+{"finding":{"osv":"GO-2026-9001","fixed_version":"v0.65.1","trace":[{"module":"github.com/quic-go/quic-go","version":"v0.65.0","package":"github.com/quic-go/quic-go"}]}}
+{"finding":{"osv":"GO-2026-9001","fixed_version":"v0.65.1","trace":[{"module":"github.com/quic-go/quic-go","version":"v0.65.0","package":"github.com/quic-go/quic-go","function":"parseFrame","receiver":"*frameParser"},{"module":"github.com/ImanMontajabi/OpenWarp","package":"github.com/ImanMontajabi/OpenWarp/internal/tunnel","function":"Start","receiver":"*Masque"}]}}
+{"osv":{"schema_version":"1.3.1","id":"GO-2026-9002","aliases":["CVE-2026-9002"],"summary":"Timing side channel in golang.org/x/crypto/ssh","details":"...","references":[]}}
+{"finding":{"osv":"GO-2026-9002","fixed_version":"v0.59.0","trace":[{"module":"golang.org/x/crypto","version":"v0.58.0"}]}}

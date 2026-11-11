@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixture in the shape of developers.cloudflare.com/changelog/rss/cloudflare-one-client.xml -->
+<rss version="2.0"><channel>
+<title>Cloudflare changelogs | Cloudflare One Client</title>
+<link>https://developers.cloudflare.com/changelog/</link>
+<item>
+  <title>Cloudflare One Client - Cloudflare One Client for macOS (version 2026.9.3000.1)</title>
+  <link>https://developers.cloudflare.com/changelog/post/2026-11-08-warp-macos-beta/</link>
+  <guid>https://developers.cloudflare.com/changelog/post/2026-11-08-warp-macos-beta/</guid>
+  <pubDate>Sun, 08 Nov 2026 10:00:00 GMT</pubDate>
+  <description>&lt;p&gt;A new beta release is available.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Fixed a MASQUE issue where the tunnel could stall while uploading.&lt;/li&gt;&lt;li&gt;Fixed a managed registration being removed when the MDM file was missing.&lt;/li&gt;&lt;li&gt;Improved the Settings window layout.&lt;/li&gt;&lt;li&gt;Fixed a security issue in the local proxy that could expose it to other users. Thanks @someone, see #12.&lt;/li&gt;&lt;/ul&gt;</description>
+</item>
+<item>
+  <title>Cloudflare One Client - Cloudflare One Client for Windows (version 2026.9.3000.1)</title>
+  <link>https://developers.cloudflare.com/changelog/post/2026-11-08-warp-windows-beta/</link>
+  <guid>https://developers.cloudflare.com/changelog/post/2026-11-08-warp-windows-beta/</guid>
+  <pubDate>Sun, 08 Nov 2026 10:00:00 GMT</pubDate>
+  <description>&lt;ul&gt;&lt;li&gt;Fixed a MASQUE issue where the tunnel could stall while uploading.&lt;/li&gt;&lt;li&gt;Fixed the DNS proxy on Windows Server.&lt;/li&gt;&lt;/ul&gt;</description>
+</item>
+<item>
+  <title>Cloudflare One Client - Cloudflare One Client for macOS (version 2026.8.2200.0)</title>
+  <link>https://developers.cloudflare.com/changelog/post/2026-11-09-warp-macos-ga/?utm=feed</link>
+  <guid>https://developers.cloudflare.com/changelog/post/2026-11-09-warp-macos-ga/</guid>
+  <pubDate>Mon, 09 Nov 2026 10:00:00 GMT</pubDate>
+  <description>&lt;ul&gt;&lt;li&gt;Fixed a MASQUE issue where the tunnel could stall while uploading.&lt;/li&gt;&lt;li&gt;Improved the tray icon.&lt;/li&gt;&lt;/ul&gt;</description>
+</item>
+<item>
+  <title>Cloudflare One Client - Cloudflare One Client for macOS (version 2026.4.1391.0)</title>
+  <link>https://developers.cloudflare.com/changelog/post/2026-11-10-warp-macos-ga/</link>
+  <guid>https://developers.cloudflare.com/changelog/post/2026-11-10-warp-macos-ga/</guid>
+  <pubDate>Tue, 10 Nov 2026 10:00:00 GMT</pubDate>
+  <description>&lt;p&gt;This hotfix addresses an issue building trusted certificate chains.&lt;/p&gt;</description>
+</item>
+<item>
+  <title>Cloudflare One Client - Cloudflare One Client for macOS (version 2026.1.10.0)</title>
+  <link>https://developers.cloudflare.com/changelog/post/2026-01-05-warp-macos-ga/</link>
+  <guid>https://developers.cloudflare.com/changelog/post/2026-01-05-warp-macos-ga/</guid>
+  <pubDate>Mon, 05 Jan 2026 10:00:00 GMT</pubDate>
+  <description>&lt;ul&gt;&lt;li&gt;Fixed WireGuard reconnecting after sleep.&lt;/li&gt;&lt;/ul&gt;</description>
+</item>
+</channel></rss>
