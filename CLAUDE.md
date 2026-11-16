@@ -154,7 +154,11 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
     `GET /v1/status` is open to any local user; everything else needs root, the admin group, or a uid passed with
     `daemon --allow-uid` (`service install` records the installing user: SUDO_UID, else the console owner). The
     root socket is 0666, a user daemon's 0600 (own uid only). 403 + log line when refused.
-  - `GET /v1/status`, `POST /v1/connect|disconnect`
+  - `GET /v1/status`, `POST /v1/connect|disconnect`. The status's `colo`/`loc` are where the tunnel exits
+    (`internal/daemon/exit.go`: one trace request through each new tunnel, retried at 0/3/10 s, kept only while
+    that session is current and only with `warp=on|plus`; never the trace's `ip`). Setting
+    `disable_location_lookup` (`openwarp location on|off`) stops it; the app's Privacy toggle drives it
+    (`Store.linkLocationLookup`). Rat reads them to place the tunnel (the endpoint is anycast).
   - `GET|PATCH /v1/settings`, `POST /v1/settings/reset`. PATCH takes a partial JSON object keyed by the
     `state.Settings` json tags and rejects unknown keys.
   - `POST /v1/verify[?cloudflare=1]`: verification of the current connection (`protection.go`).

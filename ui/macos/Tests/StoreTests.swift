@@ -29,6 +29,42 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.mode, "warp")
     }
 
+    func testStatusDecodesTheExitLocation() async throws {
+        try await backend.respond(["status"], fixture: "status-connected.json")
+        await store.refreshStatus()
+        XCTAssertEqual(store.status?.colo, "DUS")
+        XCTAssertEqual(store.status?.loc, "DE")
+    }
+
+    func testLocationLookupFollowsTheAppToggle() async throws {
+        await store.refreshAll()
+        XCTAssertEqual(store.settings?.disable_location_lookup, false)
+        // They agree: nothing is sent.
+        XCTAssertNil(store.syncLocationLookup(appEnabled: true, serviceDisabled: false))
+        // Switched off in the app (or before the service had the setting): the service follows.
+        await store.syncLocationLookup(appEnabled: false, serviceDisabled: false)?.value
+        let commands = await backend.commands
+        XCTAssertEqual(commands, [["location", "off"]])
+        await store.syncLocationLookup(appEnabled: true, serviceDisabled: true)?.value
+        let after = await backend.commands
+        XCTAssertEqual(after.last, ["location", "on"])
+        // A service before 0.2.0 has no such setting: never sent.
+        XCTAssertNil(store.syncLocationLookup(appEnabled: false, serviceDisabled: nil))
+    }
+
+    func testLinkedToggleSendsTheChoice() async throws {
+        let defaults = UserDefaults(suiteName: "local.openwarp.tests.location")!
+        defaults.removePersistentDomain(forName: "local.openwarp.tests.location")
+        defer { defaults.removePersistentDomain(forName: "local.openwarp.tests.location") }
+        let location = LocationModel(defaults: defaults)
+        store.linkLocationLookup(location)
+        await store.refreshAll()   // the service reports the lookup on, like the app
+        location.enabled = false
+        for _ in 0..<200 where await !backend.commands.contains(["location", "off"]) { try await Task.sleep(nanoseconds: 10_000_000) }
+        let commands = await backend.commands
+        XCTAssertEqual(commands.filter { $0.first == "location" }, [["location", "off"]])
+    }
+
     func testDaemonUnreachableClearsStatusAndSkipsOtherReads() async {
         await backend.fail(["status"], "cannot reach the openwarp daemon at /var/run/openwarp.sock")
         await store.refreshAll()

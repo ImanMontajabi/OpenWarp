@@ -71,7 +71,7 @@ struct SettingsView: View {
 
             CardSection(title: "Privacy") {
                 Row(icon: "globe", title: "Show public IP and location",
-                    subtitle: "While the menu bar dashboard is open, ask Cloudflare (cloudflare.com/cdn-cgi/trace) which address it sees.") {
+                    subtitle: "Ask Cloudflare (cloudflare.com/cdn-cgi/trace) which address and data centre it sees: while the menu bar dashboard is open, and once per connection through the tunnel, so companion apps such as Rat can show where your traffic exits.") {
                     Toggle("", isOn: $location.enabled)
                         .toggleStyle(PillToggleStyle())
                         .labelsHidden()

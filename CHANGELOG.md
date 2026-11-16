@@ -6,6 +6,18 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The status reports where the tunnel exits: `colo` (the Cloudflare data centre's IATA code, such as `DUS`) and
+  `loc` (its country, such as `DE`) in `openwarp -j status` and `GET /v1/status`, shown as `Exit: DUS (DE)` by
+  `openwarp status` and `openwarp location status`. The daemon learns them from one request to Cloudflare's trace
+  page through each new tunnel (proxy mode: through its own netstack; DNS-only modes have no tunnel and no exit).
+  The address Cloudflare saw is not published. Companion apps such as Rat use it to place the tunnel: the WARP
+  endpoint is an anycast address whose geolocation (Canada for `162.159.198.0/23`) says nothing about where
+  traffic leaves Cloudflare.
+- Setting `disable_location_lookup` (`openwarp location on|off`) switches that request off. The app keeps it in
+  step with Settings → Privacy → Show public IP and location.
+
 ### Fixed
 
 - Leak test (`scripts/leak-test.sh`, not part of the app):

@@ -37,6 +37,8 @@ func fixtureStatusConnected() daemon.Status {
 		},
 		DNS:     &dnsproxy.Stats{Queries: 10, Fallback: 2, Failures: 1},
 		Network: "Wi-Fi",
+		Colo:    "DUS",
+		Loc:     "DE",
 		Version: buildinfo.Version,
 		// More than the current transport: an earlier transport of this connection carried traffic too.
 		Usage: &daemon.Usage{TxBytes: 5_123_456, RxBytes: 48_654_321, Since: fixtureTime},

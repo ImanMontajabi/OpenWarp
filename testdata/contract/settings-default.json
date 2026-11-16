@@ -53,5 +53,6 @@
   "disable_wifi": false,
   "disable_ethernet": false,
   "post_quantum": true,
-  "kill_switch": false
+  "kill_switch": false,
+  "disable_location_lookup": false
 }

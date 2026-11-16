@@ -70,6 +70,13 @@ type Status struct {
 	Tunnel      *tunnel.Stats   `json:"tunnel,omitempty"`
 	DNS         *dnsproxy.Stats `json:"dns,omitempty"`
 	Network     string          `json:"network,omitempty"`
+	// Colo and Loc are where the current tunnel exits: the IATA code of the Cloudflare data centre ("DUS") and
+	// the ISO country code Cloudflare places the exit address in ("DE"), from one trace request through the
+	// tunnel after it came up (exit.go). Absent until it answered, with the lookup switched off
+	// (disable_location_lookup), in DNS-only modes, and when the request did not arrive through WARP. The
+	// endpoint address is anycast, so its geolocation says nothing about where traffic leaves Cloudflare.
+	Colo string `json:"colo,omitempty"`
+	Loc  string `json:"loc,omitempty"`
 	// Version of the daemon, so the app can tell when the installed service is outdated.
 	Version string `json:"version"`
 	// Usage is the traffic of the current connection, summed over reconnects (absent when disconnected).
@@ -120,6 +127,10 @@ type Engine struct {
 	journal   string
 	verif     *Verification
 	verifSess *session
+
+	// Where the current tunnel exits (exit.go); valid only while exitSess is the current session.
+	exit     ExitLocation
+	exitSess *session
 }
 
 // Options are the engine's system integrations; the zero value has no kill switch and no crash journal.
@@ -594,6 +605,9 @@ func (e *Engine) loop() {
 			e.setStatus(StatusConnected, "", nil)
 			log.Printf("connected (%s, %s)", set.Mode, s.describe())
 			go e.Verify(context.Background(), false) // local checks only; the Cloudflare check is on request
+			if !set.DisableLocationLookup {
+				go e.lookupExit(context.Background(), s)
+			}
 			continue
 		}
 
@@ -998,6 +1012,9 @@ func (e *Engine) Status() Status {
 			st.DNS = &ds
 		}
 		st.Proxy = s.proxyAddr
+		if e.exitSess == s && !set.DisableLocationLookup {
+			st.Colo, st.Loc = e.exit.Colo, e.exit.Loc
+		}
 		switch set.Mode {
 		case state.ModeWarp:
 			st.DNSProtocol = "udp (via tunnel)"
@@ -1052,10 +1069,12 @@ func (e *Engine) UpdateSettings(fn func(*state.Settings) error) (state.Settings,
 	n.KillSwitch, o.KillSwitch = false, false // the loop updates the rules without reconnecting
 	n.TrustedSSIDs, o.TrustedSSIDs = nil, nil
 	n.DisableWiFi, o.DisableWiFi, n.DisableEthernet, o.DisableEthernet = false, false, false, false
+	n.DisableLocationLookup, o.DisableLocationLookup = false, false // looked up (or forgotten) below
 	if fmt.Sprint(n) != fmt.Sprint(o) {
 		e.reconnect()
 	} else {
 		e.poke()
+		e.locationSettingChanged(old, next)
 	}
 	return next, nil
 }

@@ -70,6 +70,10 @@ DNS / proxy / trusted networks:
   trusted ssid add|remove <SSID> | list
   trusted wifi|ethernet enable|disable
 
+Privacy:
+  location on|off|status                Ask Cloudflare once per connection which data centre the tunnel
+                                        exits at (shown in status as colo/loc; on by default)
+
 Settings:
   settings [list] | reset
 `
@@ -226,6 +230,8 @@ func run(args []string) error {
 		return patch(map[string]any{"proxy_port": p})
 	case "trusted":
 		return trusted(rest)
+	case "location":
+		return locationCmd(rest)
 	case "settings":
 		if len(rest) > 0 && rest[0] == "reset" {
 			return call("POST", "/v1/settings/reset", nil, nil)
@@ -303,6 +309,9 @@ func status(listen bool) error {
 				line += fmt.Sprintf("\nMode: %s (%s)", st.ModeLabel, st.Mode)
 				if st.Tunnel != nil {
 					line += fmt.Sprintf("\nTunnel: %s via %s", st.Tunnel.Protocol, st.Tunnel.Endpoint)
+				}
+				if st.Colo != "" {
+					line += fmt.Sprintf("\nExit: %s (%s)", st.Colo, st.Loc)
 				}
 				if st.Proxy != "" {
 					line += "\nProxy: socks5/http://" + st.Proxy
@@ -529,6 +538,7 @@ func listSettings() error {
 	if s.EndpointOverride != "" {
 		fmt.Printf("Endpoint override: %s\n", s.EndpointOverride)
 	}
+	fmt.Printf("Exit location lookup: %v\n", !s.DisableLocationLookup)
 	fmt.Printf("Disabled for Wi-Fi: %v\nDisabled for Ethernet: %v\nTrusted SSIDs: %v\n", s.DisableWiFi, s.DisableEthernet, s.TrustedSSIDs)
 	fmt.Printf("Split tunnel (%s mode):\n", s.SplitMode)
 	for _, x := range s.SplitIPs {
@@ -556,6 +566,32 @@ func protectionText(p daemon.Protection) string {
 		out += "\nDNS: " + p.DNS
 	}
 	return out
+}
+
+// locationCmd switches the exit location lookup (one Cloudflare trace request per connection) on or off, or
+// shows where the current tunnel exits.
+func locationCmd(args []string) error {
+	need(args, 1, "on|off|status")
+	switch args[0] {
+	case "on", "off":
+		return patch(map[string]any{"disable_location_lookup": args[0] == "off"})
+	case "status":
+		var st daemon.Status
+		if err := call("GET", "/v1/status", nil, &st); err != nil {
+			return err
+		}
+		if jsonOut {
+			printJSON(map[string]string{"colo": st.Colo, "loc": st.Loc})
+			return nil
+		}
+		if st.Colo == "" {
+			fmt.Println("Exit: unknown")
+		} else {
+			fmt.Printf("Exit: %s (%s)\n", st.Colo, st.Loc)
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown location command %q (on|off|status)", args[0])
 }
 
 func killSwitchCmd(args []string) error {
