@@ -23,11 +23,13 @@ enum UITestLaunch {
         let defaults = UserDefaults(suiteName: "local.openwarp.uitest")!
         defaults.removePersistentDomain(forName: "local.openwarp.uitest")
         let newer = scenario == .updateAvailable ? "v9.9.0" : "v\(FakeDaemon.version)"
-        return AppModels(store: Store(backend: fake),
-                         setup: SetupModel(backend: fake, installer: FakeInstaller(daemon: fake)),
-                         location: LocationModel(fetcher: FakeTrace(daemon: fake), defaults: defaults),
-                         updates: UpdateChecker(fetcher: FakeReleases(tag: newer), defaults: defaults,
-                                                currentVersion: FakeDaemon.version, build: nil))
+        let models = AppModels(store: Store(backend: fake),
+                               setup: SetupModel(backend: fake, installer: FakeInstaller(daemon: fake)),
+                               location: LocationModel(fetcher: FakeTrace(daemon: fake), defaults: defaults),
+                               updates: UpdateChecker(fetcher: FakeReleases(tag: newer), defaults: defaults,
+                                                      currentVersion: FakeDaemon.version, build: nil))
+        models.store.linkLocationLookup(models.location)
+        return models
     }
 }
 
@@ -90,7 +92,7 @@ actor FakeDaemon: Backend {
         ["mode": "warp", "protocol": "masque", "always_on": false, "families": "off", "proxy_port": 40000,
          "mtu": 1280, "split_mode": "exclude", "split_ips": defaultExcludes, "fallback_domains": defaultFallback,
          "trusted_ssids": NSNull(), "disable_wifi": false, "disable_ethernet": false, "post_quantum": true,
-         "kill_switch": false]
+         "kill_switch": false, "disable_location_lookup": false]
     }
 
     let scenario: Scenario
@@ -150,6 +152,7 @@ actor FakeDaemon: Backend {
             settings = Self.defaultSettings(); settings["always_on"] = on; settings["kill_switch"] = ks
             return ok(settings)
         case ["killswitch", "on"], ["killswitch", "off"]: return patch("kill_switch", args[1] == "on")
+        case ["location", "on"], ["location", "off"]: return patch("disable_location_lookup", args[1] == "off")
         case ["verify"], ["verify", "--cloudflare"]: return verify(cloudflare: args.count == 2)
         case ["tunnel", "rotate-keys"]: return done()
         default: return setting(args)
@@ -246,6 +249,8 @@ actor FakeDaemon: Backend {
                            "tx_bytes": 123456, "rx_bytes": 654321, "tx_packets": 100, "rx_packets": 200,
                            "handshake_rtt": "42ms", "tls": "TLS 1.3"] as [String: Any]
             s["dns"] = ["queries": 10, "fallback_queries": 2, "failures": 0]
+            // Where the tunnel exits (exit.go): from the daemon's own trace request, unless switched off.
+            if mode != "doh", mode != "dot", settings["disable_location_lookup"] as? Bool != true { s["colo"] = "FRA"; s["loc"] = "DE" }
             usageTx += 48_000; usageRx += 1_350_000   // roughly 32 KB/s up, 900 KB/s down at the app's 1.5 s poll
             s["usage"] = ["tx_bytes": usageTx, "rx_bytes": usageRx, "since": usageSince] as [String: Any]
         default: break

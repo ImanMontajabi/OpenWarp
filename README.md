@@ -189,6 +189,9 @@ in [SECURITY.md](SECURITY.md).
 - The menu bar's public IP lookup sends a request to `www.cloudflare.com/cdn-cgi/trace` (at most every five
   minutes, and when the connection changes). Turn it off in Settings → Privacy. Cloudflare reports a country and
   data centre, not a city.
+- The service sends one such request through each new tunnel, so the status can say which data centre it exits
+  at (`colo`/`loc`; the address Cloudflare saw is not kept). The same switch in Settings → Privacy turns it off
+  (`openwarp location off` without the app).
 - The in-app service installer uses an AppleScript administrator prompt, not `SMAppService`, because that needs a
   Developer ID–signed app. It trusts the app bundle it runs from, so install only from a copy you built or trust.
 - Releases are ad-hoc signed, not signed with a Developer ID or notarized, so Gatekeeper warns on first launch

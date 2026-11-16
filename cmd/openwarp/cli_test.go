@@ -389,6 +389,47 @@ func TestCLIRegistrationCommands(t *testing.T) {
 	}
 }
 
+func TestCLILocationCommands(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.settingsRoutes(state.DefaultSettings())
+	for _, c := range []struct {
+		arg     string
+		disable bool
+	}{{"off", true}, {"on", false}} {
+		if r := runCLI(t, f.sock, "location", c.arg); r.code != 0 {
+			t.Fatalf("location %s: %+v", c.arg, r)
+		}
+		if got := f.lastPatch(t); len(got) != 1 || got["disable_location_lookup"] != c.disable {
+			t.Fatalf("location %s sent %v", c.arg, got)
+		}
+	}
+	n := len(f.requests())
+	if r := runCLI(t, f.sock, "location", "maybe"); r.code != 1 || !strings.Contains(r.stderr, "unknown location command") {
+		t.Fatalf("bad argument: %+v", r)
+	}
+	if len(f.requests()) != n {
+		t.Fatal("a bad argument reached the daemon")
+	}
+	f.on("GET /v1/status", func(map[string]any) (int, any) { return 200, fixtureStatusConnected() })
+	if r := runCLI(t, f.sock, "location", "status"); r.code != 0 || !strings.Contains(r.stdout, "Exit: DUS (DE)") {
+		t.Fatalf("location status: %+v", r)
+	}
+	if r := runCLI(t, f.sock, "-j", "location", "status"); !strings.Contains(r.stdout, `"colo": "DUS"`) || !strings.Contains(r.stdout, `"loc": "DE"`) {
+		t.Fatalf("location status json: %q", r.stdout)
+	}
+	if r := runCLI(t, f.sock, "status"); !strings.Contains(r.stdout, "Exit: DUS (DE)") {
+		t.Fatalf("status without the exit: %q", r.stdout)
+	}
+	f.on("GET /v1/status", func(map[string]any) (int, any) {
+		st := fixtureStatusConnected()
+		st.Colo, st.Loc = "", ""
+		return 200, st
+	})
+	if r := runCLI(t, f.sock, "location", "status"); !strings.Contains(r.stdout, "Exit: unknown") {
+		t.Fatalf("location status without an answer: %q", r.stdout)
+	}
+}
+
 func TestCLILeakProtectionCommands(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.settingsRoutes(state.DefaultSettings())

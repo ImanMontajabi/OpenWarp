@@ -165,7 +165,9 @@ class Reasons(unittest.TestCase):
         old = probe.probe_tcp
         try:
             def refused(*a):
-                raise OSError(65, "No route to host")
+                # errno 65 is EHOSTUNREACH on macOS only (ENOPKG on Linux): use the platform's number.
+                import errno as e
+                raise OSError(e.EHOSTUNREACH, "No route to host")
             probe.probe_tcp = refused
             self.assertFalse(probe.run("en0", "tcp|1.1.1.1|443"))
             self.assertEqual(probe.LAST_REASON, "EHOSTUNREACH")

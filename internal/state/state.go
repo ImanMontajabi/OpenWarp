@@ -112,6 +112,10 @@ type Settings struct {
 	PostQuantum      bool      `json:"post_quantum"`
 	// KillSwitch blocks traffic outside the tunnel while connected or reconnecting (pf; off by default).
 	KillSwitch bool `json:"kill_switch"`
+	// DisableLocationLookup stops the one Cloudflare trace request the daemon makes through each new tunnel to
+	// learn where it exits (Status.Colo/Loc). Off by default, like the app's "Show public IP and location",
+	// which keeps it in step; a missing key (older state files) means the lookup is on.
+	DisableLocationLookup bool `json:"disable_location_lookup"`
 }
 
 func DefaultSettings() Settings {

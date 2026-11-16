@@ -42,6 +42,17 @@ TIMEOUT = 2.5        # single probes; the outage watcher uses WATCH_TIMEOUT
 WATCH_TIMEOUT = 0.7  # an answer from Cloudflare or the router takes well under 0.1 s
 
 
+def read_lines(path):
+    """The file's lines, closed after reading."""
+    with open(path) as f:
+        return f.readlines()
+
+
+def read_text(path):
+    with open(path) as f:
+        return f.read()
+
+
 def sock(iface, addr, kind):
     fam = socket.AF_INET6 if ":" in addr else socket.AF_INET
     s = socket.socket(fam, kind)
@@ -197,7 +208,7 @@ def stream_bytes(log, t0, t1):
     """Bytes received between t0 and t1, the HTTP status and how the stream ended."""
     status, end, samples = "-", "-", []
     try:
-        lines = open(log).readlines()
+        lines = read_lines(log)
     except OSError:
         return 0, "-", "not started"
     for line in lines:
@@ -241,8 +252,8 @@ def routes_diff(before, after, tun, prefixes):
     managed = set()
     for p in prefixes:
         managed.add(ipaddress.ip_network(p, strict=False))
-    old = set(l.strip() for l in open(before) if l.strip())
-    new = set(l.strip() for l in open(after) if l.strip())
+    old = set(l.strip() for l in read_lines(before) if l.strip())
+    new = set(l.strip() for l in read_lines(after) if l.strip())
     out = []
     for sign, lines in (("-", old - new), ("+", new - old)):
         for line in sorted(lines):
@@ -332,12 +343,12 @@ def main(argv):
         return stream(argv[2], argv[3], argv[4], argv[5])
     if cmd == "pf-delta":
         # One line per rule whose packet counter grew: "PACKETS RULE".
-        for n, rule in pf_delta(open(argv[2]).read(), open(argv[3]).read()):
+        for n, rule in pf_delta(read_text(argv[2]), read_text(argv[3])):
             print(n, rule)
         return 0
     if cmd == "pf-counters":
         # One line per rule: "EVALUATIONS PACKETS RULE" ("-" when pfctl printed no counters for it).
-        for rule, ev, pk in pf_counters(open(argv[2]).read()):
+        for rule, ev, pk in pf_counters(read_text(argv[2])):
             print("%s %s %s" % ("-" if ev is None else ev, "-" if pk is None else pk, rule))
         return 0
     if cmd == "bytes":
@@ -351,7 +362,7 @@ def main(argv):
         return 1 if out else 0
     if cmd == "coverage":
         start, end = float(argv[3]), float(argv[4])
-        rows = [l.split() for l in open(argv[2]) if l.strip()]
+        rows = [l.split() for l in read_lines(argv[2]) if l.strip()]
         times = sorted(float(r[0]) for r in rows)
         leaks = [r for r in rows if r[2] == "ok" and start <= float(r[0]) <= end]
         inside = [t for t in times if start <= t <= end]
