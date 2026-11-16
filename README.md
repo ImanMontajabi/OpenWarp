@@ -174,10 +174,11 @@ in [SECURITY.md](SECURITY.md).
 - Full-device modes change routes and DNS with `route` and `networksetup` instead of Apple's Network Extension
   framework. If the daemon is killed while connected, it restores routes and DNS when launchd restarts it;
   `sudo openwarp recover` does the same by hand.
-- The kill switch is experimental: its rules and logic are tested offline. The live leak test
-  (`scripts/leak-test.sh`) ran once on one Apple silicon Mac against the build just before this release, and no
-  probe got around the tunnel; the fixes it led to have not been run through it yet. While it is on, other pf
-  firewalls on the Mac do not apply to the traffic it lets through. If it ever blocks your connection,
+- The kill switch is experimental: its rules and logic are tested offline, and the live leak test
+  (`scripts/leak-test.sh`) ran twice against the 0.1.0 release build on one Apple silicon Mac. No probe got
+  around the tunnel, but one of the test's self-checks still fails (see
+  [privacy and leak protection](docs/privacy-and-leak-protection.md)). While it is on, other pf firewalls on
+  the Mac do not apply to the traffic it lets through. If it ever blocks your connection,
   disconnect or run `sudo openwarp recover`.
 - Any local user can read the service's status; only root, administrators and the user who installed the
   service can control it ([details](docs/privacy-and-leak-protection.md#who-can-control-the-service)).
@@ -188,6 +189,9 @@ in [SECURITY.md](SECURITY.md).
 - The menu bar's public IP lookup sends a request to `www.cloudflare.com/cdn-cgi/trace` (at most every five
   minutes, and when the connection changes). Turn it off in Settings → Privacy. Cloudflare reports a country and
   data centre, not a city.
+- The service sends one such request through each new tunnel, so the status can say which data centre it exits
+  at (`colo`/`loc`; the address Cloudflare saw is not kept). The same switch in Settings → Privacy turns it off
+  (`openwarp location off` without the app).
 - The in-app service installer uses an AppleScript administrator prompt, not `SMAppService`, because that needs a
   Developer ID–signed app. It trusts the app bundle it runs from, so install only from a copy you built or trust.
 - Releases are ad-hoc signed, not signed with a Developer ID or notarized, so Gatekeeper warns on first launch

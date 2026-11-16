@@ -6,6 +6,32 @@ All notable changes to OpenWarp are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The status reports where the tunnel exits: `colo` (the Cloudflare data centre's IATA code, such as `DUS`) and
+  `loc` (its country, such as `DE`) in `openwarp -j status` and `GET /v1/status`, shown as `Exit: DUS (DE)` by
+  `openwarp status` and `openwarp location status`. The daemon learns them from one request to Cloudflare's trace
+  page through each new tunnel (proxy mode: through its own netstack; DNS-only modes have no tunnel and no exit).
+  The address Cloudflare saw is not published. Companion apps such as Rat use it to place the tunnel: the WARP
+  endpoint is an anycast address whose geolocation (Canada for `162.159.198.0/23`) says nothing about where
+  traffic leaves Cloudflare.
+- Setting `disable_location_lookup` (`openwarp location on|off`) switches that request off. The app keeps it in
+  step with Settings → Privacy → Show public IP and location.
+
+### Fixed
+
+- Leak test (`scripts/leak-test.sh`, not part of the app):
+  - Background downloads and probes were left running after the test: the script killed a subshell instead
+    of the probe.
+  - An empty anchor left behind by an earlier run failed the anchor order check. Only anchors with rules
+    listed before OpenWarp's fail it now, as in the daemon's own audit.
+  - The pf evaluation-order measurement now reads pf's rule counters for both test anchors. The anchor listed
+    after the kill switch must never be evaluated. For the one before it, the counters show whether pf
+    evaluated it and whether the probe's packets matched, which the 2026-11-11 runs could not tell when its
+    positive control failed.
+  - Probes now record why they failed (the socket error, or a timeout), and the positive control also reports
+    which kill switch rules counted packets during its probe.
+
 ## [0.1.0] - 2026-11-11
 
 First public version (MVP). Release notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).

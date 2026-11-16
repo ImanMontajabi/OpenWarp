@@ -154,7 +154,11 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
     `GET /v1/status` is open to any local user; everything else needs root, the admin group, or a uid passed with
     `daemon --allow-uid` (`service install` records the installing user: SUDO_UID, else the console owner). The
     root socket is 0666, a user daemon's 0600 (own uid only). 403 + log line when refused.
-  - `GET /v1/status`, `POST /v1/connect|disconnect`
+  - `GET /v1/status`, `POST /v1/connect|disconnect`. The status's `colo`/`loc` are where the tunnel exits
+    (`internal/daemon/exit.go`: one trace request through each new tunnel, retried at 0/3/10 s, kept only while
+    that session is current and only with `warp=on|plus`; never the trace's `ip`). Setting
+    `disable_location_lookup` (`openwarp location on|off`) stops it; the app's Privacy toggle drives it
+    (`Store.linkLocationLookup`). Rat reads them to place the tunnel (the endpoint is anycast).
   - `GET|PATCH /v1/settings`, `POST /v1/settings/reset`. PATCH takes a partial JSON object keyed by the
     `state.Settings` json tags and rejects unknown keys.
   - `POST /v1/verify[?cloudflare=1]`: verification of the current connection (`protection.go`).
@@ -227,7 +231,7 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
   - CLI help: `warp-cli --help`.
   - Hopper (demo) cannot finish analysing the 84 MB daemon slice, so prefer strings, symbols and logs.
 
-## Verification status (as of 2026-11-10)
+## Verification status (as of 2026-11-11)
 
 **Verified live** against Cloudflare (proxy mode, user daemon): registration, MASQUE key enrollment, and
 `warp=on` via MASQUE (443 and 500) and via WireGuard (2408). The GUI was tested against the live daemon.
@@ -238,8 +242,12 @@ GUI (SwiftUI) ──runs──> openwarp -j <cmd> ──HTTP over unix socket─
 - The kill switch on a live connection (pf anchor load, `pfctl -E/-X`, blocking during reconnect and after
   `kill -9`), the IPv6 reject routes, and journal recovery. One run of the extended leak test on 2026-11-11
   (`0.1.0+dev.c5f025d`, one Apple silicon Mac, Wi-Fi): 49 passed, 3 failed, 1 skipped, no probe got around the
-  tunnel; the failures led to the route-ownership and ALTQ fixes and are not re-run yet. Offline: fake `pfctl`, plus `pfctl -n` parsing of
-  the generated rules. Run `sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh` (asks nothing, changes
+  tunnel; the failures led to the route-ownership and ALTQ fixes. Two runs of the 0.1.0 release build
+  (2026-11-11, same Mac): 61 passed, 1 failed each; no probe got around the tunnel; pf's counters confirm the
+  anchors are evaluated in listing order. Open: the positive control (a `pass quick` in an anchor before
+  OpenWarp's) never matched the probe's SYN; every blocked probe failed in ~50 ms (a local error, not a
+  timeout). PR #18 records the errno and kill switch counters to settle it. Offline: fake `pfctl`, plus
+  `pfctl -n` parsing of the generated rules. Run `sudo OPENWARP_LEAK_TEST=I-UNDERSTAND scripts/leak-test.sh` (asks nothing, changes
   networking; only with the user's go-ahead).
 - `warp` / `warp+doh` / `warp+dot` / `tunnel_only` modes: utun address setup, split routes, endpoint host
   route, `networksetup` DNS change and restore (`internal/sysnet/sysnet_darwin.go`).

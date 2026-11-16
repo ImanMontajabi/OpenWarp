@@ -4,6 +4,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 
 // MARK: - Models (match the daemon's JSON)
 
@@ -69,6 +70,10 @@ struct Status: Decodable {
     var tunnel: TunnelStats?
     var dns: DNSStats?
     var network: String?
+    /// Where the tunnel exits: the Cloudflare data centre (IATA, "DUS") and its country ("DE"). Absent from daemons
+    /// before 0.2.0, with the lookup switched off and until the daemon's trace request answered.
+    var colo: String?
+    var loc: String?
     var version: String?   // absent from daemons older than 0.1.0
     var usage: Usage?
     var protection: Protection?   // absent from daemons without leak protection (0.1.0)
@@ -90,6 +95,7 @@ struct Settings: Decodable {
     var disable_ethernet: Bool
     var post_quantum: Bool
     var kill_switch: Bool?   // absent from daemons without leak protection (0.1.0)
+    var disable_location_lookup: Bool?   // absent from daemons before 0.2.0
 }
 
 struct Registration: Decodable {
@@ -326,6 +332,29 @@ final class Store: ObservableObject {
         }
     }
 
+    // MARK: exit location lookup
+
+    private var locationLink: AnyCancellable?
+
+    /// Keeps the service's exit location lookup (`disable_location_lookup`: one Cloudflare trace request per
+    /// connection, so companion apps such as Rat know which data centre the tunnel exits at) in step with the
+    /// app's "Show public IP and location" toggle. The toggle is the one place the user decides whether OpenWarp
+    /// asks Cloudflare where they are; the service follows it whenever the app runs.
+    func linkLocationLookup(_ location: LocationModel) {
+        locationLink = location.$enabled
+            .combineLatest($settings.map { $0?.disable_location_lookup }.removeDuplicates())
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled, disabled in self?.syncLocationLookup(appEnabled: enabled, serviceDisabled: disabled) }
+    }
+
+    /// Sends the service the app's choice when they differ. Nil when they agree, while a change is in flight, or
+    /// when the service predates the setting (`serviceDisabled` nil).
+    @discardableResult
+    func syncLocationLookup(appEnabled: Bool, serviceDisabled: Bool?) -> Task<Void, Never>? {
+        guard pending["disable_location_lookup"] == nil, let serviceDisabled, serviceDisabled == appEnabled else { return nil }
+        return set("disable_location_lookup", String(!appEnabled), ["location", appEnabled ? "on" : "off"])
+    }
+
     @discardableResult
     func toggle() -> Task<Void, Never> {
         let action: PendingAction = wantsOn ? .disconnect : .connect
@@ -400,6 +429,8 @@ struct AppModels {
         #if DEBUG
         if let models = UITestLaunch.models() { return models }
         #endif
-        return AppModels(store: Store(), setup: SetupModel(), location: LocationModel(), updates: UpdateChecker())
+        let models = AppModels(store: Store(), setup: SetupModel(), location: LocationModel(), updates: UpdateChecker())
+        models.store.linkLocationLookup(models.location)
+        return models
     }
 }

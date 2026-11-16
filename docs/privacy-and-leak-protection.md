@@ -143,8 +143,18 @@ rules ran through the extended test once on one Apple silicon Mac (2026-11-11, `
 mode, MASQUE): no probe got around the tunnel, including 29 probes over the 12.8 s of a daemon kill and restart;
 3 checks failed, all explained (the leak test misread pfctl's ALTQ notes as an anchor name; OpenWarp removed
 macOS's own `169.254` link-local route on disconnect and recover, fixed since; see the CHANGELOG), and the
-already-running download check was skipped because its download never started. The fixed version has not been
-run on a real Mac yet. Run `scripts/leak-test.sh` (below) before relying on it.
+already-running download check was skipped because its download never started.
+
+The 0.1.0 release build (the DMG) ran through the test twice on the same Mac (2026-11-11, Traffic and DNS mode,
+MASQUE): 61 of 62 checks passed in each run. No probe got around the tunnel, including during the daemon kill
+and restart and after a crash with no daemon running, and the packet capture saw nothing unexpected leave the
+physical interface. pf's rule counters showed that pf evaluates the `com.apple` anchors in listing order: it
+never reached the test anchor after OpenWarp's, and it did evaluate the one before it. The failing check is
+the positive control: the probe's packets never matched the `pass` rule in the earlier test anchor, so the
+test has not yet shown that it would catch a rule that overrides the kill switch. Why is still open; the test
+now records each probe's socket error and the kill switch's counters to find out. Two runs on one Mac are not
+broad validation: sleep/wake, network changes, a reboot, other interfaces, WireGuard and the other modes are
+untested. Run `scripts/leak-test.sh` (below) before relying on it.
 
 ## Who can control the service
 
@@ -251,9 +261,14 @@ blocked. Then it:
   flow (TCP to 1.1.1.1:443 on the physical interface, stateless) into a temporary anchor of its own that sorts
   after OpenWarp's (the probe must stay blocked), then into one that sorts before it (the positive control: the
   probe must get through, and `openwarp verify` must report that anchor), then empties it again and checks the
-  probe is blocked again. It reports what the main ruleset evaluates before `com.apple/*`, any translation rule
-  with `pass` (which skips filtering), and the rules of every other `com.apple` anchor. No other pf rule is
-  changed;
+  probe is blocked again. pf's own rule counters show whether pf evaluated each test anchor at all: the one
+  after OpenWarp's must never be evaluated, because OpenWarp's anchor ends evaluation for every packet, and the
+  one before it must be. If the positive control fails anyway, the counters show whether the probe's packets
+  matched there, and whether the kill switch counted them. Every blocked probe records why it failed: the
+  socket error (such as `EHOSTUNREACH` or `ENETUNREACH`) or a timeout. Anchors listed before OpenWarp's fail the check only if they have rules: pf keeps empty
+  anchors, and an empty one cannot end evaluation. It reports what the main ruleset evaluates before
+  `com.apple/*`, any translation rule with `pass` (which skips filtering), and the rules of every other
+  `com.apple` anchor. No other pf rule is changed;
 - captures what leaves the physical interface (anything but the edge, DHCP/ND and the exclusions, and anything
   with the tunnel's inner address) through the rest of the connection and the restart;
 - kills the daemon, probes continuously until launchd has it connected again, and reports how much of the outage

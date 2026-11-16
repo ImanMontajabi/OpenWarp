@@ -356,13 +356,12 @@ func (e *Engine) Verify(ctx context.Context, withTrace bool) (*Verification, err
 		if sess.tr == nil {
 			add("cloudflare", "skip", "DNS-only mode: traffic is not tunnelled")
 		} else {
-			dial := (&net.Dialer{Timeout: 10 * time.Second}).DialContext
-			if sess.proxy != nil {
-				dial = sess.proxy.Dial
-			}
 			tctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			m, err := e.probe.Trace(tctx, dial)
+			m, err := e.probe.Trace(tctx, traceDial(sess))
 			cancel()
+			if x, ok := exitFromTrace(m); err == nil && ok {
+				e.recordExit(sess, x) // the same answer tells where the tunnel exits
+			}
 			switch {
 			case err != nil:
 				add("cloudflare", "fail", "trace request failed: "+err.Error())

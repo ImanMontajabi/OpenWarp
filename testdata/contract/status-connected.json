@@ -28,6 +28,8 @@
     "failures": 1
   },
   "network": "Wi-Fi",
+  "colo": "DUS",
+  "loc": "DE",
   "version": "0.1.0",
   "usage": {
     "tx_bytes": 5123456,
